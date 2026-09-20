@@ -240,6 +240,7 @@
       .gainers .leader-ltp { color: var(--green); }
       .losers .leader-ltp { color: var(--red); }
        .leaders-side, .flow-panel { position: relative; }
+       .leaders-side .access-cta { top: 32%; }
        .leaders-side .leader-table tbody, .flow-panel .flow-list { filter: blur(4px); opacity: .48; pointer-events: none; user-select: none; }
        .access-cta { position: absolute; top: 54%; left: 50%; z-index: 4; display: grid; width: min(360px, calc(100% - 40px)); gap: 12px; transform: translate(-50%, -50%); padding: 23px 30px; border: 1px solid rgba(179, 198, 222, .78); border-radius: 20px; background: linear-gradient(145deg, rgba(255, 255, 255, .98), rgba(246, 250, 255, .96) 58%, rgba(238, 253, 247, .94)); box-shadow: 0 30px 70px rgba(16, 37, 67, .2), 0 8px 20px rgba(16, 37, 67, .08), inset 0 1px 0 rgba(255, 255, 255, .95); backdrop-filter: blur(18px); isolation: isolate; text-align: center; }
        .access-cta::after { content: ""; position: absolute; inset: 1px; z-index: -1; border-radius: 19px; background: radial-gradient(circle at 12% 0%, rgba(184, 244, 215, .32), transparent 42%), radial-gradient(circle at 100% 100%, rgba(58, 103, 219, .12), transparent 44%); pointer-events: none; }
@@ -601,16 +602,27 @@
        ranked.forEach((row, i) => { row.rank = i + 1; row.rfactor = Number(row.rfactor ?? row.score ?? 0); });
        return ranked;
      }
-     function formatNumber(number, digits = 1) { return Number(number).toFixed(digits); }
-     function escapeHtml(value) { return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;"); }
-     function normalizePhone(value) { return String(value ?? "").replace(/\D/g, "").replace(/^91(?=\d{10}$)/, ""); }
-     function accessSessionId() {
-       let sessionId = sessionStorage.getItem("scannerAccessSessionId");
-       if (!sessionId) {
-         sessionId = window.crypto?.randomUUID?.() || `scanner-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-         sessionStorage.setItem("scannerAccessSessionId", sessionId);
-       }
-       return sessionId;
+      function formatNumber(number, digits = 1) { return Number(number).toFixed(digits); }
+      function escapeHtml(value) { return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;"); }
+      function normalizePhone(value) { return String(value ?? "").replace(/\D/g, "").replace(/^91(?=\d{10}$)/, ""); }
+      function accessStorageGet(key) {
+        try { return localStorage.getItem(key) || sessionStorage.getItem(key); } catch (error) { return sessionStorage.getItem(key); }
+      }
+      function accessStorageSet(key, value) {
+        try { localStorage.setItem(key, value); } catch (error) { /* Continue with the tab session when storage is restricted. */ }
+        sessionStorage.setItem(key, value);
+      }
+      function accessStorageRemove(key) {
+        try { localStorage.removeItem(key); } catch (error) { /* Nothing to clear when storage is restricted. */ }
+        sessionStorage.removeItem(key);
+      }
+      function accessSessionId() {
+        let sessionId = accessStorageGet("scannerAccessSessionId");
+        if (!sessionId) {
+          sessionId = window.crypto?.randomUUID?.() || `scanner-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+          accessStorageSet("scannerAccessSessionId", sessionId);
+        }
+        return sessionId;
      }
      async function accessRequest(path, payload) {
        const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), cache: "no-store" });
@@ -642,15 +654,15 @@
        } catch (loadError) {
          state.allowedNumbers = [];
        }
-       const saved = normalizePhone(sessionStorage.getItem("scannerAccessNumber"));
-       if (saved && state.allowedNumbers.includes(saved)) {
+        const saved = normalizePhone(accessStorageGet("scannerAccessNumber"));
+        if (saved) {
          try {
            await accessRequest("/api/access/login", { phone: saved, session_id: accessSessionId() });
            setAccessGranted(true, saved);
            loadLiveData();
            return;
          } catch (error) {
-           sessionStorage.removeItem("scannerAccessNumber");
+            accessStorageRemove("scannerAccessNumber");
          }
        }
        forms.forEach(form => form.addEventListener("submit", async event => {
@@ -670,7 +682,7 @@
          errorBox.hidden = true;
          try {
            await accessRequest("/api/access/login", { phone: number, session_id: accessSessionId() });
-           sessionStorage.setItem("scannerAccessNumber", number);
+            accessStorageSet("scannerAccessNumber", number);
            setAccessGranted(true, number);
            await loadLiveData();
            showToast("Access granted");
@@ -888,7 +900,7 @@
          showToast("Could not log out; please try again");
          return;
        }
-       sessionStorage.removeItem("scannerAccessNumber");
+        accessStorageRemove("scannerAccessNumber");
        setAccessGranted(false);
        state.liveRows = null;
        state.live = false;
