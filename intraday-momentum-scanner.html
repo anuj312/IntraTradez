@@ -371,7 +371,9 @@
      body { background: radial-gradient(circle at 83% -8%, rgba(197, 218, 255, .48), transparent 28%), radial-gradient(circle at 20% 0%, rgba(219, 248, 236, .34), transparent 24%), #f5f7fb; }
      .main { position: relative; }
      .topline { margin-bottom: 27px; }
-     .eyebrow { display: inline-flex; padding: 7px 10px; border: 1px solid rgba(13, 155, 115, .18); border-radius: 99px; background: rgba(228, 248, 240, .75); box-shadow: 0 5px 15px rgba(13, 155, 115, .06); }
+     .eyebrow { display: inline-flex; align-items: center; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; font-size: 11px; letter-spacing: .18em; }
+     #feedStatusText { text-transform: uppercase; }
+     .eyebrow .live-dot { width: 10px; height: 10px; box-shadow: 0 0 0 6px rgba(13, 155, 115, .11); }
      h1 { margin-top: 11px; background: linear-gradient(105deg, #10203a 0%, #203b68 52%, #0d8568 112%); -webkit-background-clip: text; background-clip: text; color: transparent; text-wrap: balance; }
      .subhead { color: #78869d; }
      .content-grid { grid-template-columns: minmax(0, 1fr) 380px; gap: 22px; }
@@ -611,10 +613,15 @@
     function newsLink(value) { return /^https?:\/\//i.test(String(value || "")) ? value : ""; }
     function newsTimestamp(value) { if (!value) return "--"; return new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }).format(new Date(Number(value) * 1000)); }
     function newsScore(value) { const score = Number(value || 0); return `${score >= 0 ? "+" : ""}${score.toFixed(2)}`; }
-    function renderLatestNewsSide() {
-      const container = document.getElementById("latestNewsSide");
-      const items = [...state.newsItems].sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0)).slice(0, 40);
-      if (!items.length) { container.innerHTML = '<div class="latest-news-empty">Waiting for the news feed.</div>'; return; }
+     function renderLatestNewsSide() {
+       const container = document.getElementById("latestNewsSide");
+       const items = [...state.newsItems].sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0)).slice(0, 40);
+       if (!items.length) {
+         const scanning = ["starting", "scanning"].includes(state.newsMeta.status);
+         const message = state.newsMeta.status === "error" ? "Media feed unavailable right now." : scanning ? "Scanning media headlines..." : "No media headlines in the last 24 hours.";
+         container.innerHTML = `<div class="latest-news-empty">${message}</div>`;
+         return;
+       }
       container.innerHTML = items.map(item => {
         const mood = String(item.sentiment || "NEUTRAL").toLowerCase();
         const href = newsLink(item.link);
@@ -825,12 +832,14 @@
         const payload = await response.json();
         state.newsItems = Array.isArray(payload.items) ? payload.items : [];
         state.newsMeta = payload.meta || {};
-        const scanning = state.newsMeta.status === "scanning";
+         const scanning = ["starting", "scanning"].includes(state.newsMeta.status);
         newsStatus.className = `news-status${scanning ? " loading" : ""}`;
-        newsStatus.textContent = scanning ? "Scanning universe" : `${state.newsItems.length} current stories`;
+        newsStatus.textContent = scanning ? "Scanning media" : `${state.newsItems.length} current stories`;
         renderNews();
         if (manual) showToast("News refreshed");
       } catch (error) {
+        state.newsMeta = { status: "error" };
+        renderNews();
         newsStatus.className = "news-status error";
         newsStatus.textContent = "News unavailable";
         if (manual) showToast("News feed unavailable");

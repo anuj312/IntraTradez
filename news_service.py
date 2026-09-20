@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import calendar
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 import os
 import ssl
 import threading
 import time
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
@@ -51,7 +52,8 @@ QUERY_MAP = {
 NEWS_WINDOW_HOURS = int(os.getenv("NEWS_WINDOW_HOURS", "24"))
 NEWS_ITEMS_PER_SYMBOL = int(os.getenv("NEWS_ITEMS_PER_SYMBOL", "5"))
 NEWS_POLL_SEC = int(os.getenv("NEWS_POLL_SEC", "60"))
-NEWS_REQUEST_DELAY_SEC = float(os.getenv("NEWS_REQUEST_DELAY_SEC", "0.12"))
+NEWS_WORKERS = max(1, int(os.getenv("NEWS_WORKERS", "8")))
+NEWS_SYMBOLS_PER_POLL = max(1, int(os.getenv("NEWS_SYMBOLS_PER_POLL", "60")))
 NEWS_WATCHLIST_MODE = os.getenv("NEWS_WATCHLIST_MODE", "ALL").upper()
 
 SYMBOL_TO_SECTORS: dict[str, list[str]] = {}
@@ -151,6 +153,15 @@ def _source(entry: Any, title: str) -> str:
     return source or (title.rsplit(" - ", 1)[-1].strip() if " - " in title else "Indian business media")
 
 
+def _symbol_from_title(title: str) -> str:
+    lowered = title.lower()
+    for symbol in SYMBOLS:
+        name = QUERY_MAP.get(symbol, symbol)
+        if name.lower() in lowered or symbol.lower() in lowered:
+            return symbol
+    return "MARKET"
+
+
 def _request_bytes(url: str) -> bytes:
     request = Request(url, headers={"User-Agent": "Mozilla/5.0 Indian market research dashboard"})
     context = ssl.create_default_context(cafile=certifi.where())
@@ -169,6 +180,7 @@ class NewsService:
         self.last_poll = None
         self.last_error = None
         self.last_new_media = 0
+        self.symbol_cursor = 0
 
     def start(self) -> None:
         with self.lock:
@@ -183,6 +195,39 @@ class NewsService:
         query = f'("{name}") (India OR Indian OR NSE OR BSE OR Nifty) (stock OR share OR results OR order OR contract) ({sites}) when:1d'
         url = "https://news.google.com/rss/search?q=" + quote(query) + "&hl=en-IN&gl=IN&ceid=IN:en"
         return feedparser.parse(_request_bytes(url))
+
+    def _market_feed(self):
+        sites = " OR ".join(f"site:{site}" for site in NEWS_SITES)
+        query = f'(India OR Indian) (stock OR share OR market OR results) ({sites}) when:1d'
+        url = "https://news.google.com/rss/search?q=" + quote(query) + "&hl=en-IN&gl=IN&ceid=IN:en"
+        return feedparser.parse(_request_bytes(url))
+
+    def _symbol_entries(self, symbol: str) -> tuple[str, list[Any], Optional[str]]:
+        try:
+            return symbol, self._feed(symbol).entries[:NEWS_ITEMS_PER_SYMBOL], None
+        except Exception as exc:
+            return symbol, [], f"{symbol}: {exc.__class__.__name__}"
+
+    def _add_entry(self, media: list[dict[str, Any]], seen_media: set[str], symbol: str, entry: Any) -> bool:
+        link = entry.get("link")
+        title = str(entry.get("title") or "").strip()
+        if not link or not title or link in seen_media:
+            return False
+        label, score = self.sentiment.classify(title)
+        seen_media.add(link)
+        media.append({
+            "id": link,
+            "ts": _timestamp(entry),
+            "symbol": symbol,
+            "sector": ",".join(SYMBOL_TO_SECTORS.get(symbol, [])),
+            "title": title,
+            "link": link,
+            "source": _source(entry, title),
+            "sentiment": label,
+            "sent_score": score,
+            "kind": "MEDIA",
+        })
+        return True
 
     def _prune(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         cutoff = int(time.time()) - NEWS_WINDOW_HOURS * 60 * 60
@@ -199,43 +244,40 @@ class NewsService:
         with self.lock:
             media = list(self.media)
             seen_media = set(self.seen_media)
+            if SYMBOLS:
+                symbols = [SYMBOLS[(self.symbol_cursor + index) % len(SYMBOLS)] for index in range(min(NEWS_SYMBOLS_PER_POLL, len(SYMBOLS)))]
+                self.symbol_cursor = (self.symbol_cursor + len(symbols)) % len(SYMBOLS)
+            else:
+                symbols = []
         new_media = 0
-        for position, symbol in enumerate(SYMBOLS, start=1):
-            try:
-                for entry in self._feed(symbol).entries[:NEWS_ITEMS_PER_SYMBOL]:
-                    link = entry.get("link")
-                    title = str(entry.get("title") or "").strip()
-                    if not link or not title or link in seen_media:
-                        continue
-                    label, score = self.sentiment.classify(title)
-                    seen_media.add(link)
-                    media.append({
-                        "id": link,
-                        "ts": _timestamp(entry),
-                        "symbol": symbol,
-                        "sector": ",".join(SYMBOL_TO_SECTORS.get(symbol, [])),
-                        "title": title,
-                        "link": link,
-                        "source": _source(entry, title),
-                        "sentiment": label,
-                        "sent_score": score,
-                        "kind": "MEDIA",
-                    })
-                    new_media += 1
-            except Exception as exc:
-                log.debug("News fetch failed for %s: %s", symbol, exc)
-            time.sleep(NEWS_REQUEST_DELAY_SEC)
-            if position % 5 == 0:
+        errors = 0
+        try:
+            for entry in self._market_feed().entries[:NEWS_ITEMS_PER_SYMBOL * 3]:
+                new_media += int(self._add_entry(media, seen_media, _symbol_from_title(str(entry.get("title") or "")), entry))
+        except Exception as exc:
+            errors += 1
+            log.info("Broad media feed failed: %s", exc)
+        self._publish_progress(media, seen_media)
+
+        with ThreadPoolExecutor(max_workers=NEWS_WORKERS, thread_name_prefix="media-feed") as executor:
+            futures = [executor.submit(self._symbol_entries, symbol) for symbol in symbols]
+            for future in as_completed(futures):
+                symbol, entries, error = future.result()
+                if error:
+                    errors += 1
+                    log.debug("News fetch failed for %s: %s", symbol, error)
+                for entry in entries:
+                    new_media += int(self._add_entry(media, seen_media, symbol, entry))
                 self._publish_progress(media, seen_media)
 
         with self.lock:
             self.media = sorted(self._prune(media), key=lambda item: item["ts"], reverse=True)[:1200]
             self.seen_media = seen_media
             self.last_poll = datetime.now(IST).isoformat()
-            self.last_error = None
+            self.last_error = f"{errors} media feeds unavailable" if errors and not new_media else None
             self.last_new_media = new_media
             self.status = "live"
-        log.info("News poll complete: +%s media", new_media)
+        log.info("News poll complete: +%s media from %s symbols (%s feed errors)", new_media, len(symbols), errors)
 
     def _loop(self) -> None:
         while True:

@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import pickle
 import threading
 import time
 from collections import deque
@@ -46,6 +47,10 @@ def parse_clock(value: str, fallback: dtime) -> dtime:
 
 API_KEY = clean_env(os.getenv("KITE_API_KEY", ""))
 ACCESS_TOKEN = clean_env(os.getenv("KITE_ACCESS_TOKEN", ""))
+DATA_DIR = Path(clean_env(os.getenv("SCANNER_DATA_DIR", "/var/data")))
+if not DATA_DIR.exists():
+    DATA_DIR = BASE_DIR / ".runtime"
+HISTORY_CACHE_PATH = DATA_DIR / "history-cache.pkl"
 HISTORY_SLEEP_SEC = float(os.getenv("HISTORY_SLEEP_SEC", "0.35"))
 SEED_DAYS_5M = int(os.getenv("SEED_DAYS_5M", "15"))
 SEED_DAYS_DAILY = int(os.getenv("SEED_DAYS_DAILY", "240"))
@@ -77,8 +82,11 @@ LIVE_INIT_LOCK = threading.Lock()
 SEED_PROGRESS = {"done": 0, "total": 0, "errors": 0}
 DETAIL_SYMBOLS: set[str] = set()
 SEED_IN_PROGRESS = False
+FAST_SEED_IN_PROGRESS = False
 FAST_ROTATION_STARTED = False
 HISTORY_SEED_DATE: Optional[date] = None
+HISTORY_CACHE_LOADED = False
+SEED_REQUESTED_DATE: Optional[date] = None
 DAILY_REFRESH_STARTED = False
 DAILY_REFRESH_START_LOCK = threading.Lock()
 SCAN_CACHE: Dict[str, Dict[str, List[dict]]] = {
@@ -147,6 +155,64 @@ def _normalize_history(candles: list[dict]) -> pd.DataFrame:
     for column in ("open", "high", "low", "close", "volume"):
         frame[column] = pd.to_numeric(frame[column], errors="coerce")
     return frame.dropna(subset=["date", "open", "high", "low", "close"]).sort_values("date").reset_index(drop=True)
+
+
+def _load_history_cache() -> bool:
+    global HISTORY_CACHE_LOADED, HISTORY_SEED_DATE, SEED_REQUESTED_DATE
+    if not HISTORY_CACHE_PATH.exists():
+        return False
+    try:
+        with HISTORY_CACHE_PATH.open("rb") as handle:
+            payload = pickle.load(handle)
+        if not isinstance(payload, dict):
+            return False
+        if payload.get("version") != 1 or not payload.get("complete"):
+            return False
+        cached_date = date.fromisoformat(str(payload["seed_date"]))
+        cached_history = payload.get("history") or {}
+        loaded = 0
+        with DATA_LOCK:
+            for symbol, histories in cached_history.items():
+                token = SYMBOL_TO_TOKEN.get(symbol)
+                if not token or not isinstance(histories, dict):
+                    continue
+                frames = {name: frame for name, frame in histories.items() if name in {"intraday", "regular"} and isinstance(frame, pd.DataFrame) and not frame.empty}
+                if frames:
+                    HISTORY[token] = frames
+                    loaded += 1
+        if not loaded:
+            return False
+        HISTORY_SEED_DATE = cached_date
+        SEED_REQUESTED_DATE = cached_date
+        HISTORY_CACHE_LOADED = True
+        log.info("Loaded persisted history cache for %s symbols from %s", loaded, HISTORY_CACHE_PATH)
+        return True
+    except (OSError, EOFError, KeyError, TypeError, ValueError, AttributeError, pickle.PickleError):
+        log.exception("Unable to load persisted history cache")
+        return False
+
+
+def _save_history_cache() -> None:
+    if not HISTORY_SEED_DATE:
+        return
+    with DATA_LOCK:
+        cached_history = {
+            TOKEN_TO_SYMBOL[token]: histories
+            for token, histories in HISTORY.items()
+            if token in TOKEN_TO_SYMBOL and histories
+        }
+    if not cached_history:
+        return
+    payload = {"version": 1, "complete": True, "seed_date": HISTORY_SEED_DATE.isoformat(), "history": cached_history}
+    temporary_path = HISTORY_CACHE_PATH.with_suffix(".tmp")
+    try:
+        HISTORY_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with temporary_path.open("wb") as handle:
+            pickle.dump(payload, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        os.replace(temporary_path, HISTORY_CACHE_PATH)
+        log.info("Persisted history cache for %s symbols", len(cached_history))
+    except OSError:
+        log.exception("Unable to persist history cache")
 
 
 def load_instruments() -> None:
@@ -326,7 +392,7 @@ def _seed_symbol(symbol: str, token: int) -> None:
 
 
 def _rotate_fast_symbols() -> None:
-    global SEED_IN_PROGRESS
+    global FAST_SEED_IN_PROGRESS
     if not FAST_MODE or not market_is_open() or not TICKER_CONNECTED:
         return
     selected = set(_fast_symbol_candidates())
@@ -336,8 +402,8 @@ def _rotate_fast_symbols() -> None:
     if not added:
         return
     _set_ticker_modes(selected)
-    SEED_IN_PROGRESS = True
-    SEED_PROGRESS.update({"done": 0, "total": len(added), "errors": 0})
+    FAST_SEED_IN_PROGRESS = True
+    rotation_errors = 0
     ready = set()
     try:
         for symbol in sorted(added):
@@ -350,18 +416,18 @@ def _rotate_fast_symbols() -> None:
                     if not HISTORY.get(token, {}).get("intraday", pd.DataFrame()).empty:
                         ready.add(symbol)
             except Exception:
-                SEED_PROGRESS["errors"] += 1
+                rotation_errors += 1
                 log.exception("Fast rotation history seed failed for %s", symbol)
             finally:
-                SEED_PROGRESS["done"] += 1
+                pass
     finally:
         with DATA_LOCK:
             DETAIL_SYMBOLS.clear()
             DETAIL_SYMBOLS.update((current & selected) | ready)
             active_symbols = set(DETAIL_SYMBOLS)
         _set_ticker_modes(active_symbols)
-        SEED_IN_PROGRESS = False
-    log.info("Fast mode rotated: %s detailed symbols, %s new histories", len(active_symbols), len(ready))
+        FAST_SEED_IN_PROGRESS = False
+    log.info("Fast mode rotated: %s detailed symbols, %s new histories, %s errors", len(active_symbols), len(ready), rotation_errors)
 
 
 def _start_fast_rotation() -> None:
@@ -421,14 +487,21 @@ def _start_daily_refresh() -> None:
 
 
 def _start_history_seed(force: bool = False) -> None:
-    global SEED_IN_PROGRESS, SEED_STARTED, HISTORY_SEED_DATE
+    global HISTORY_CACHE_LOADED, SEED_IN_PROGRESS, SEED_REQUESTED_DATE, SEED_STARTED, HISTORY_SEED_DATE
     if SEED_STARTED or kite is None:
         if not force or kite is None:
             return
-    today = datetime.now(IST).date()
-    if SEED_IN_PROGRESS or HISTORY_SEED_DATE == today:
+    if HISTORY_CACHE_LOADED and not force:
+        log.info("Using persisted history cache; skipping redundant startup seed")
         return
+    today = datetime.now(IST).date()
+    if SEED_IN_PROGRESS or HISTORY_SEED_DATE == today or SEED_REQUESTED_DATE == today:
+        log.info("Skipping duplicate history seed request for %s", today.isoformat())
+        return
+    if force:
+        HISTORY_CACHE_LOADED = False
     SEED_STARTED = True
+    SEED_REQUESTED_DATE = today
     HISTORY_SEED_DATE = today
     SEED_PROGRESS.update({"done": 0, "total": 0, "errors": 0})
     if FAST_MODE:
@@ -445,7 +518,7 @@ def _start_history_seed(force: bool = False) -> None:
     SEED_PROGRESS["total"] = len(tokens)
 
     def run() -> None:
-        global SEED_IN_PROGRESS
+        global HISTORY_CACHE_LOADED, SEED_IN_PROGRESS
         try:
             for token, symbol in tokens:
                 try:
@@ -457,6 +530,11 @@ def _start_history_seed(force: bool = False) -> None:
                     SEED_PROGRESS["done"] += 1
         finally:
             SEED_IN_PROGRESS = False
+            if SEED_PROGRESS["errors"] == 0 and SEED_PROGRESS["done"] == SEED_PROGRESS["total"]:
+                _save_history_cache()
+                HISTORY_CACHE_LOADED = True
+            else:
+                HISTORY_CACHE_LOADED = False
             _start_fast_rotation()
 
     threading.Thread(target=run, name="history-seed", daemon=True).start()
@@ -1018,6 +1096,9 @@ def health():
         "last_tick": datetime.fromtimestamp(LAST_TICK_TS, IST).isoformat() if LAST_TICK_TS else None,
         "cache_ready": bool(SCAN_CACHE_UPDATED_AT),
         "cache_updated_at": datetime.fromtimestamp(SCAN_CACHE_UPDATED_AT, IST).isoformat() if SCAN_CACHE_UPDATED_AT else None,
+        "history_cache_loaded": HISTORY_CACHE_LOADED,
+        "history_seed_date": HISTORY_SEED_DATE.isoformat() if HISTORY_SEED_DATE else None,
+        "seed_requested_date": SEED_REQUESTED_DATE.isoformat() if SEED_REQUESTED_DATE else None,
         "news": NEWS_SERVICE.health(),
     })
 
@@ -1077,7 +1158,8 @@ def initialize_live() -> None:
     _start_scan_compute()
     try:
         load_instruments()
-        _start_history_seed()
+        if not _load_history_cache():
+            _start_history_seed()
         _start_ticker()
     except Exception:
         log.exception("Live market startup failed; serving demo UI")
