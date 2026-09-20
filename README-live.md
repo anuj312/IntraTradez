@@ -29,6 +29,9 @@ Open `http://127.0.0.1:8050/` in a browser. Do not open the HTML file directly i
 - Ranks positive and negative movers together by composite momentum score, keeping one continuous rank sequence so green and red names appear together.
 - Shows the cumulative KiteTicker tick count beside the feed status.
 - Serves `/api/scan` for the page and `/api/health` for feed status.
+- Reads the approved phone-number allowlist from `numbers.txt`; only listed numbers can clear the dashboard access gate.
+- Serves `/api/access/login` and `/api/access/logout`; each approved number can hold one active session, and a second session is rejected until the first logs out.
+- Requires an active access session for `/api/scan`, so live scanner data is not returned to an unauthenticated page.
 - Starts market-data initialization in the background under Uvicorn, so the dashboard opens while history is still seeding.
 - Recomputes detailed rows and whole-universe Sector flow in a background cache; `/api/scan` only reads that cache, so browser polling does not rerun indicators or RFactor calculations.
 - Detects the next calendar session, clears prior-session live ticks, and reseeds fresh Kite history automatically without requiring a Render restart; the previous-session cache stays visible while this happens.
@@ -62,5 +65,7 @@ python3 -m uvicorn app:app --host 0.0.0.0 --port 8050 --workers 1
 7. Deploy and open the Render URL. The health check is `/api/health`.
 
 `render.yaml` contains the same setup. Use an always-on instance for dependable market-hours streaming; sleeping instances can miss ticks. Kite access tokens usually expire daily, so update `KITE_ACCESS_TOKEN` in Render before the next session.
+
+The active-phone lock is held in process memory. Keep one worker per service, as configured above; a server restart clears active locks and allows the approved number to log in again.
 
 This is research context only. It is not an order-entry system or a trading signal.

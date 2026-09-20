@@ -97,6 +97,28 @@ SCAN_CACHE_UPDATED_AT = 0.0
 SCAN_COMPUTE_STARTED = False
 SCAN_CACHE_LOCK = threading.RLock()
 SCAN_COMPUTE_START_LOCK = threading.Lock()
+ACCESS_SESSION_LOCK = threading.RLock()
+ACTIVE_ACCESS_SESSIONS: Dict[str, str] = {}
+
+
+def normalize_access_number(value: Any) -> str:
+    digits = "".join(character for character in str(value or "") if character.isdigit())
+    return digits[2:] if digits.startswith("91") and len(digits) == 12 else digits
+
+
+def allowed_access_numbers() -> set[str]:
+    try:
+        values = (BASE_DIR / "numbers.txt").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return set()
+    return {normalize_access_number(value) for value in values if normalize_access_number(value)}
+
+
+def access_session_is_active(phone: str, session_id: str) -> bool:
+    if not phone or not session_id:
+        return False
+    with ACCESS_SESSION_LOCK:
+        return ACTIVE_ACCESS_SESSIONS.get(phone) == session_id
 
 
 def market_is_open(now: Optional[datetime] = None) -> bool:
@@ -1083,6 +1105,39 @@ def index():
     return send_file(BASE_DIR / "intraday-momentum-scanner.html")
 
 
+@app.get("/numbers.txt")
+def numbers():
+    return send_file(BASE_DIR / "numbers.txt", mimetype="text/plain")
+
+
+@app.post("/api/access/login")
+def access_login():
+    payload = request.get_json(silent=True) or {}
+    phone = normalize_access_number(payload.get("phone"))
+    session_id = clean_env(str(payload.get("session_id", "")))
+    if not phone or not session_id:
+        return jsonify({"ok": False, "error": "invalid_request"}), 400
+    if phone not in allowed_access_numbers():
+        return jsonify({"ok": False, "error": "not_allowed"}), 403
+    with ACCESS_SESSION_LOCK:
+        current_session = ACTIVE_ACCESS_SESSIONS.get(phone)
+        if current_session and current_session != session_id:
+            return jsonify({"ok": False, "error": "already_logged_in"}), 409
+        ACTIVE_ACCESS_SESSIONS[phone] = session_id
+    return jsonify({"ok": True})
+
+
+@app.post("/api/access/logout")
+def access_logout():
+    payload = request.get_json(silent=True) or {}
+    phone = normalize_access_number(payload.get("phone"))
+    session_id = clean_env(str(payload.get("session_id", "")))
+    with ACCESS_SESSION_LOCK:
+        if ACTIVE_ACCESS_SESSIONS.get(phone) == session_id:
+            ACTIVE_ACCESS_SESSIONS.pop(phone, None)
+    return jsonify({"ok": True})
+
+
 @app.get("/api/health")
 def health():
     status, live = _feed_status()
@@ -1106,6 +1161,10 @@ def health():
 
 @app.get("/api/scan")
 def scan():
+    phone = normalize_access_number(request.args.get("access_phone"))
+    session_id = clean_env(request.args.get("access_session_id", ""))
+    if not access_session_is_active(phone, session_id):
+        return jsonify({"error": "access_required"}), 403
     timeframe = request.args.get("type", "intraday").lower()
     universe = request.args.get("universe", "stocks").lower()
     sector = request.args.get("sector", "all").upper()
