@@ -29,7 +29,6 @@ Open `http://127.0.0.1:8050/` in a browser. Do not open the HTML file directly i
 - Ranks positive and negative movers together by composite momentum score, keeping one continuous rank sequence so green and red names appear together.
 - Shows the cumulative KiteTicker tick count beside the feed status.
 - Serves `/api/scan` for the page and `/api/health` for feed status.
-- Serves `/api/news` for India-only media headlines from the supplied sector universe, with FinBERT sentiment. A broad media pass publishes quickly, then concurrent symbol feeds fill the rolling window.
 - Starts market-data initialization in the background under Uvicorn, so the dashboard opens while history is still seeding.
 - Recomputes detailed rows and whole-universe Sector flow in a background cache; `/api/scan` only reads that cache, so browser polling does not rerun indicators or RFactor calculations.
 - Detects the next calendar session, clears prior-session live ticks, and reseeds fresh Kite history automatically without requiring a Render restart; the previous-session cache stays visible while this happens.
@@ -40,11 +39,11 @@ Open `http://127.0.0.1:8050/` in a browser. Do not open the HTML file directly i
 - The pre-market seed starts at `07:30 IST` by default (`PREMARKET_SEED_TIME` can change it), so current history is normally ready before the `09:15 IST` open.
 
 Full-universe mode is enabled by default. Set `FAST_MODE=true` to optionally watch all stocks with lightweight quote ticks while limiting detailed history/order-book work to `FAST_SYMBOL_LIMIT` stocks. Fast mode intentionally refreshes newly selected symbols as the rotation changes; keep `FAST_MODE=false` to avoid that behavior. `FAST_SELECTION_WAIT_SEC` controls how long startup waits for live quotes before selecting the Fast mode list, and `FAST_RESELECT_SEC` controls how often that list rotates (default: 300 seconds).
-`SCAN_COMPUTE_EVERY_SEC` controls the background cache refresh interval (default: 3 seconds). `NEWS_POLL_SEC` controls news-source polling (default: 60 seconds), while the browser refreshes the news panel every 10 seconds. `NEWS_WINDOW_HOURS` controls the rolling news window (default: 24 hours). `NEWS_WORKERS` controls concurrent media requests (default: 8), and `NEWS_SYMBOLS_PER_POLL` controls the rotating symbol batch (default: 60).
+`SCAN_COMPUTE_EVERY_SEC` controls the background cache refresh interval (default: 8 seconds).
 
 The service keeps a best-effort local history cache when `SCANNER_DATA_DIR` is available, but the default Render filesystem is ephemeral. The same running instance will not repeat a completed seed on the same day; a true Render restart requires a fresh seed unless an external or persistent storage service is configured.
 
-The initial historical seed is deliberately paced and can take a few minutes for the full universe. Until enough history is available, the page remains in demo mode. Kite access tokens normally expire daily, so provide a fresh token before starting the server.
+The initial historical seed is deliberately paced and can take a few minutes for the full universe. The lightweight defaults use 7 days of 5-minute candles and 120 days of daily candles. Until enough history is available, the page remains in demo mode. Kite access tokens normally expire daily, so provide a fresh token before starting the server.
 
 For a single-process production deployment, use one worker because the process owns one KiteTicker connection:
 

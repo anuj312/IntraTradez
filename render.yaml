@@ -15,3 +15,9 @@ services:
         sync: false
       - key: FAST_MODE
         value: "false"
+      - key: SCAN_COMPUTE_EVERY_SEC
+        value: "8"
+      - key: SEED_DAYS_5M
+        value: "7"
+      - key: SEED_DAYS_DAILY
+        value: "120"

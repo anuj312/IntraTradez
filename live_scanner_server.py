@@ -22,7 +22,6 @@ import pandas as pd
 from flask import Flask, jsonify, request, send_file
 from kiteconnect import KiteConnect, KiteTicker
 
-from news_service import NEWS_SERVICE
 from sector_definitions import ALL_SYMBOLS, SECTOR_DEFINITIONS
 
 
@@ -52,15 +51,15 @@ if not DATA_DIR.exists():
     DATA_DIR = BASE_DIR / ".runtime"
 HISTORY_CACHE_PATH = DATA_DIR / "history-cache.pkl"
 HISTORY_SLEEP_SEC = float(os.getenv("HISTORY_SLEEP_SEC", "0.35"))
-SEED_DAYS_5M = int(os.getenv("SEED_DAYS_5M", "15"))
-SEED_DAYS_DAILY = int(os.getenv("SEED_DAYS_DAILY", "240"))
+SEED_DAYS_5M = int(os.getenv("SEED_DAYS_5M", "7"))
+SEED_DAYS_DAILY = int(os.getenv("SEED_DAYS_DAILY", "120"))
 TICK_STALE_SEC = int(os.getenv("TICK_STALE_SEC", "20"))
 PORT = int(os.getenv("PORT", "8050"))
 FAST_MODE = os.getenv("FAST_MODE", "false").strip().lower() not in {"0", "false", "no", "off"}
 FAST_SYMBOL_LIMIT = int(os.getenv("FAST_SYMBOL_LIMIT", "25"))
 FAST_SELECTION_WAIT_SEC = int(os.getenv("FAST_SELECTION_WAIT_SEC", "20"))
 FAST_RESELECT_SEC = int(os.getenv("FAST_RESELECT_SEC", "300"))
-SCAN_COMPUTE_EVERY_SEC = float(os.getenv("SCAN_COMPUTE_EVERY_SEC", "3"))
+SCAN_COMPUTE_EVERY_SEC = float(os.getenv("SCAN_COMPUTE_EVERY_SEC", "8"))
 PREMARKET_SEED_TIME = parse_clock(os.getenv("PREMARKET_SEED_TIME", "07:30"), dtime(7, 30))
 
 app = Flask(__name__)
@@ -858,6 +857,7 @@ def _build_row(symbol: str, sector: str, timeframe: str) -> Optional[dict]:
     return {
         "symbol": symbol,
         "display": symbol,
+        "ltp": round(ltp, 2),
         "sector": sector,
         "direction": 1 if positive else -1,
         "change": round(change, 2),
@@ -902,6 +902,7 @@ def _aggregate_index(name: str, rows: List[dict]) -> Optional[dict]:
         return sum(float(row.get(key) or 0.0) * weight for row, weight in zip(rows, weights)) / total_weight
 
     change = average("change")
+    ltp = average("ltp")
     ratio = average("ratio")
     ema = average("ema")
     score = average("score")
@@ -910,6 +911,7 @@ def _aggregate_index(name: str, rows: List[dict]) -> Optional[dict]:
     return {
         "symbol": name,
         "display": name,
+        "ltp": round(ltp, 2),
         "sector": "INDEX",
         "direction": 1 if change >= 0 else -1,
         "change": round(change, 2),
@@ -1099,7 +1101,6 @@ def health():
         "history_cache_loaded": HISTORY_CACHE_LOADED,
         "history_seed_date": HISTORY_SEED_DATE.isoformat() if HISTORY_SEED_DATE else None,
         "seed_requested_date": SEED_REQUESTED_DATE.isoformat() if SEED_REQUESTED_DATE else None,
-        "news": NEWS_SERVICE.health(),
     })
 
 
@@ -1134,19 +1135,6 @@ def scan():
     })
 
 
-@app.get("/api/news")
-def news():
-    sector = request.args.get("sector", "ALL").upper()
-    symbol = request.args.get("symbol", "").upper().strip()
-    try:
-        limit = int(request.args.get("limit", "300"))
-    except ValueError:
-        limit = 300
-    if sector not in SECTOR_DEFINITIONS and sector != "ALL":
-        sector = "ALL"
-    return jsonify(NEWS_SERVICE.snapshot(sector=sector, symbol=symbol, limit=limit))
-
-
 def initialize_live() -> None:
     """Start live services once for both Python and Gunicorn entrypoints."""
     global LIVE_INITIALIZED
@@ -1154,7 +1142,6 @@ def initialize_live() -> None:
         if LIVE_INITIALIZED:
             return
         LIVE_INITIALIZED = True
-    NEWS_SERVICE.start()
     _start_scan_compute()
     try:
         load_instruments()
