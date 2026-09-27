@@ -410,7 +410,7 @@ tbody tr:hover { background: #fafcfd; }
 
 .sector-modal-ratio { color: var(--green); font-size: 13px; font-weight: 850; }
 
-.sector-stock-score { color: var(--blue); font-size: 13px; font-weight: 850; }
+.sector-stock-score { color: #000000; font-size: 13px; font-weight: 850; }
 
 .sector-modal-empty { color: var(--muted); padding: 22px 19px; font-size: 11px; }
 
@@ -436,7 +436,7 @@ tbody tr:hover { background: #fafcfd; }
 
 .losers .leader-column-head .leader-average::before { box-shadow: 0 0 0 3px rgba(165, 48, 60, .10); }
 
-.leader-column-head > span:last-child { color: #91a0b3; font-size: 9px; font-weight: 800; }
+.leader-column-head > span:last-child:not(.leader-average) { color: #91a0b3; font-size: 9px; font-weight: 800; }
 
 .leader-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 4px var(--green-soft); }
 
@@ -459,6 +459,8 @@ tbody tr:hover { background: #fafcfd; }
 .leader-table td { overflow: hidden; padding: 9px 2px; color: #314158; font-size: 10px; text-overflow: ellipsis; }
 
 .leader-table th:not(:first-child), .leader-table td:not(:first-child) { text-align: right; }
+
+.leader-table th:nth-child(2), .leader-table td:nth-child(2) { text-align: center; }
 
 .leader-table tbody tr { border-bottom: 1px solid #edf1f5; }
 
@@ -1132,6 +1134,7 @@ top: 28%;
   body.theme-dark .leader-column-head .leader-average::before { box-shadow: 0 0 0 3px rgba(146, 237, 199, .12); }
   body.theme-dark .losers .leader-column-head .leader-average { border-color: #6b3742; background: linear-gradient(135deg, #43252f, #351f2a); color: #ffabb7; }
   body.theme-dark .losers .leader-column-head .leader-average::before { box-shadow: 0 0 0 3px rgba(255, 171, 183, .12); }
+  body.theme-dark .sector-stock-score { color: #ffffff; }
   body.theme-dark .leader-column + .leader-column { border-color: #2d3d57; }
   body.theme-dark .leader-table tbody tr { border-color: #263650; }
   body.theme-dark .leader-table .leader-score, body.theme-dark .score-panel .leader-score { color: #ffffff; }
@@ -1309,7 +1312,7 @@ top: 28%;
 
 <section class="leader-column gainers">
 
-<div class="leader-column-head"><span class="leader-dot"></span><h3>Top Gainers by Score</h3><span class="leader-average" id="gainersAverage">Avg Buy Volm —</span><span id="gainersCount">0</span></div>
+<div class="leader-column-head"><span class="leader-dot"></span><h3>Top Gainers by Score</h3><span class="leader-average" id="gainersAverage" title="Average volume ratio across all gainers in the selected universe">Avg Buy Volm —</span></div>
 
 <div class="leader-list" id="gainersList"></div>
 
@@ -1317,7 +1320,7 @@ top: 28%;
 
 <section class="leader-column losers">
 
-<div class="leader-column-head"><span class="leader-dot"></span><h3>Top Losers by Score</h3><span class="leader-average" id="losersAverage">Avg Sell Volm —</span><span id="losersCount">0</span></div>
+<div class="leader-column-head"><span class="leader-dot"></span><h3>Top Losers by Score</h3><span class="leader-average" id="losersAverage" title="Average volume ratio across all losers in the selected universe">Avg Sell Volm —</span></div>
 
 <div class="leader-list" id="losersList"></div>
 
@@ -1569,7 +1572,7 @@ top: 28%;
 
 <h2 class="sector-modal-title" id="sectorModalTitle">Sector constituents</h2>
 
-<div class="sector-modal-sub">Sorted by Score, highest first</div>
+<div class="sector-modal-sub">Sorted by Momentum, highest first</div>
 
 </div>
 
@@ -1577,7 +1580,7 @@ top: 28%;
 
 </div>
 
-<div class="sector-modal-columns"><span>Stock name</span><span>Vol ratio</span><span>Score</span></div>
+<div class="sector-modal-columns"><span>Stock name</span><span>Vol ratio</span><span>Momentum</span></div>
 
 <div class="sector-modal-rows" id="sectorModalRows"></div>
 
@@ -1842,7 +1845,7 @@ function scoreMultiplier(number, showSign = false) {
   if (!Number.isFinite(value)) return "—";
   const scaled = Math.round((value / 10) * 100) / 100;
   const formatted = scaled.toFixed(2).replace(/\.?0+$/, "");
-  return `${showSign && scaled > 0 ? "+" : ""}${formatted}x`;
+  return `${showSign && scaled > 0 ? "+" : ""}${formatted}`;
 }
 
 function escapeHtml(value) { return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;"); }
@@ -2116,6 +2119,7 @@ submit.disabled = false;
 
 function renderMovers(allRows, universeRows = allRows) {
 
+// Header averages use every qualifying row, not the visible top-40 leader slices.
 const buyUniverse = universeRows.filter(row => Number(row.change) > 0 && Number.isFinite(Number(row.ratio)));
 
 const sellUniverse = universeRows.filter(row => Number(row.change) < 0 && Number.isFinite(Number(row.ratio)));
@@ -2195,10 +2199,6 @@ return `<tr data-tradingview-symbol="${escapeHtml(row.symbol)}" tabindex="0" rol
 document.getElementById("gainersList").innerHTML = renderList(gainers, "positive");
 
 document.getElementById("losersList").innerHTML = renderList(losers, "negative");
-
-document.getElementById("gainersCount").textContent = gainers.length;
-
-document.getElementById("losersCount").textContent = losers.length;
 
 const averageBuy = averageRatio(buyUniverse);
 
@@ -2870,7 +2870,8 @@ universe: state.universe,
 
 sector: state.sector,
 
-limit: "250",
+ // Request the full configured universe so averages cannot be truncated before rendering.
+ limit: "2000",
 
 _: Date.now()
 
