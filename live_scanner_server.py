@@ -1,7 +1,14 @@
-"""Live backend for intraday-momentum-scanner.html.
+"""
+Live backend for intraday-momentum-scanner.html (Flask / WSGI).
 
-Run this file with Kite credentials in KITE_API_KEY and KITE_ACCESS_TOKEN.
-The browser never receives either credential; it only calls /api/scan.
+Recommended Render start command (Gunicorn):
+  gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --worker-class gthread --threads 8 --timeout 120
+
+Notes:
+- Kite credentials stay server-side (KITE_API_KEY, KITE_ACCESS_TOKEN).
+- /api/scan is protected by phone+session_id via /api/access/login.
+- This version REMOVES the public /numbers.txt endpoint (privacy). Update the HTML to
+  stop fetching numbers.txt and rely on /api/access/login response instead.
 """
 
 from __future__ import annotations
@@ -19,14 +26,26 @@ from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 import pandas as pd
-from flask import Flask, jsonify, request, send_file
+from flask import Flask, Response, jsonify, request, send_file
+
+try:
+    # Optional but strongly recommended (bandwidth saver on free hosting).
+    from flask_compress import Compress  # type: ignore
+except Exception:  # pragma: no cover
+    Compress = None  # type: ignore
+
 from kiteconnect import KiteConnect, KiteTicker
 
 from sector_definitions import ALL_SYMBOLS, SECTOR_DEFINITIONS
 
 
+# ----------------------------
+# Config / Globals
+# ----------------------------
+
 BASE_DIR = Path(__file__).resolve().parent
 IST = ZoneInfo("Asia/Kolkata")
+
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("momentum-scanner")
@@ -46,48 +65,82 @@ def parse_clock(value: str, fallback: dtime) -> dtime:
 
 API_KEY = clean_env(os.getenv("KITE_API_KEY", ""))
 ACCESS_TOKEN = clean_env(os.getenv("KITE_ACCESS_TOKEN", ""))
+
+# Prefer persistent disk path if you attach one on Render.
 DATA_DIR = Path(clean_env(os.getenv("SCANNER_DATA_DIR", "/var/data")))
 if not DATA_DIR.exists():
     DATA_DIR = BASE_DIR / ".runtime"
+try:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+except OSError:
+    DATA_DIR = BASE_DIR / ".runtime"
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
 HISTORY_CACHE_PATH = DATA_DIR / "history-cache.pkl"
+
 HISTORY_SLEEP_SEC = float(os.getenv("HISTORY_SLEEP_SEC", "0.35"))
 SEED_DAYS_5M = int(os.getenv("SEED_DAYS_5M", "7"))
 SEED_DAYS_DAILY = int(os.getenv("SEED_DAYS_DAILY", "120"))
+
 TICK_STALE_SEC = int(os.getenv("TICK_STALE_SEC", "20"))
+
 PORT = int(os.getenv("PORT", "8050"))
+
 FAST_MODE = os.getenv("FAST_MODE", "false").strip().lower() not in {"0", "false", "no", "off"}
 FAST_SYMBOL_LIMIT = int(os.getenv("FAST_SYMBOL_LIMIT", "25"))
 FAST_SELECTION_WAIT_SEC = int(os.getenv("FAST_SELECTION_WAIT_SEC", "20"))
 FAST_RESELECT_SEC = int(os.getenv("FAST_RESELECT_SEC", "300"))
+
 SCAN_COMPUTE_EVERY_SEC = float(os.getenv("SCAN_COMPUTE_EVERY_SEC", "8"))
+
 PREMARKET_SEED_TIME = parse_clock(os.getenv("PREMARKET_SEED_TIME", "07:30"), dtime(7, 30))
 
+# API payload sizing (bandwidth control)
+DEFAULT_SCAN_LIMIT = int(os.getenv("DEFAULT_SCAN_LIMIT", "250"))
+MAX_SCAN_LIMIT = int(os.getenv("MAX_SCAN_LIMIT", "2000"))
+
+# Access session TTL (memory safety)
+ACCESS_TTL_SEC = int(os.getenv("ACCESS_TTL_SEC", "43200"))  # 12 hours
+
+
 app = Flask(__name__)
+if Compress is not None:
+    Compress(app)
+
 kite: Optional[KiteConnect] = None
 SYMBOL_TO_TOKEN: Dict[str, int] = {}
 TOKEN_TO_SYMBOL: Dict[int, str] = {}
+
 TICK_STATE: Dict[int, Dict[str, Any]] = {}
 PRICE_HISTORY: Dict[int, deque] = {}
 HISTORY: Dict[int, Dict[str, pd.DataFrame]] = {}
+
 DATA_LOCK = threading.RLock()
 LAST_TICK_TS = 0.0
 TOTAL_TICKS = 0
 TICKER_CONNECTED = False
 TICKER_STARTED = False
 TICKER_WS: Any = None
-SEED_STARTED = False
+
 LIVE_INITIALIZED = False
 LIVE_INIT_LOCK = threading.Lock()
+
 SEED_PROGRESS = {"done": 0, "total": 0, "errors": 0}
 DETAIL_SYMBOLS: set[str] = set()
+
 SEED_IN_PROGRESS = False
 FAST_SEED_IN_PROGRESS = False
 FAST_ROTATION_STARTED = False
-HISTORY_SEED_DATE: Optional[date] = None
+
+HISTORY_SEED_DATE: Optional[date] = None          # date of last successful seed
+SEED_REQUESTED_DATE: Optional[date] = None        # date currently requested/running
+
 HISTORY_CACHE_LOADED = False
-SEED_REQUESTED_DATE: Optional[date] = None
+
 DAILY_REFRESH_STARTED = False
 DAILY_REFRESH_START_LOCK = threading.Lock()
+
+# Cache computed scan rows to keep /api/scan cheap.
 SCAN_CACHE: Dict[str, Dict[str, List[dict]]] = {
     "intraday": {"stocks": [], "index": []},
     "regular": {"stocks": [], "index": []},
@@ -97,16 +150,28 @@ SCAN_CACHE_UPDATED_AT = 0.0
 SCAN_COMPUTE_STARTED = False
 SCAN_CACHE_LOCK = threading.RLock()
 SCAN_COMPUTE_START_LOCK = threading.Lock()
-ACCESS_SESSION_LOCK = threading.RLock()
-ACTIVE_ACCESS_SESSIONS: Dict[str, str] = {}
 
+# Access session store: phone -> {"session_id": str, "ts": float}
+ACCESS_SESSION_LOCK = threading.RLock()
+ACTIVE_ACCESS_SESSIONS: Dict[str, Dict[str, Any]] = {}
+
+# Allowlist cache (avoid reading file every request)
+ALLOWLIST_LOCK = threading.RLock()
+ALLOWLIST_CACHE: set[str] = set()
+ALLOWLIST_CACHE_TS = 0.0
+ALLOWLIST_CACHE_TTL_SEC = int(os.getenv("ALLOWLIST_CACHE_TTL_SEC", "60"))
+
+
+# ----------------------------
+# Access control
+# ----------------------------
 
 def normalize_access_number(value: Any) -> str:
-    digits = "".join(character for character in str(value or "") if character.isdigit())
+    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
     return digits[2:] if digits.startswith("91") and len(digits) == 12 else digits
 
 
-def allowed_access_numbers() -> set[str]:
+def _load_allowlist() -> set[str]:
     try:
         values = (BASE_DIR / "numbers.txt").read_text(encoding="utf-8").splitlines()
     except OSError:
@@ -114,12 +179,47 @@ def allowed_access_numbers() -> set[str]:
     return {normalize_access_number(value) for value in values if normalize_access_number(value)}
 
 
+def allowed_access_numbers() -> set[str]:
+    global ALLOWLIST_CACHE, ALLOWLIST_CACHE_TS
+    now = time.time()
+    with ALLOWLIST_LOCK:
+        if (now - ALLOWLIST_CACHE_TS) <= ALLOWLIST_CACHE_TTL_SEC and ALLOWLIST_CACHE:
+            return set(ALLOWLIST_CACHE)
+        ALLOWLIST_CACHE = _load_allowlist()
+        ALLOWLIST_CACHE_TS = now
+        return set(ALLOWLIST_CACHE)
+
+
+def _prune_sessions(now: Optional[float] = None) -> None:
+    now = now or time.time()
+    with ACCESS_SESSION_LOCK:
+        expired = [
+            phone for phone, record in ACTIVE_ACCESS_SESSIONS.items()
+            if (now - float(record.get("ts") or 0.0)) > ACCESS_TTL_SEC
+        ]
+        for phone in expired:
+            ACTIVE_ACCESS_SESSIONS.pop(phone, None)
+
+
 def access_session_is_active(phone: str, session_id: str) -> bool:
     if not phone or not session_id:
         return False
+    now = time.time()
+    _prune_sessions(now)
     with ACCESS_SESSION_LOCK:
-        return ACTIVE_ACCESS_SESSIONS.get(phone) == session_id
+        record = ACTIVE_ACCESS_SESSIONS.get(phone)
+        if not record:
+            return False
+        if record.get("session_id") != session_id:
+            return False
+        # Touch session
+        record["ts"] = now
+        return True
 
+
+# ----------------------------
+# Market status helpers
+# ----------------------------
 
 def market_is_open(now: Optional[datetime] = None) -> bool:
     now = now or datetime.now(IST)
@@ -140,6 +240,45 @@ def _has_current_session_data(now: Optional[datetime] = None) -> bool:
     return False
 
 
+def _feed_status() -> tuple[str, bool]:
+    """
+    status values used by frontend:
+      - live
+      - seeding
+      - previous_session
+      - market_closed
+      - waiting_for_ticks
+      - missing_credentials
+    """
+    now = datetime.now(IST)
+
+    if kite is None or not SYMBOL_TO_TOKEN:
+        return "missing_credentials", False
+
+    if not market_is_open(now):
+        # Distinguish post-close if we did see today's data.
+        if now.weekday() < 5 and now.time() > dtime(15, 30) and _has_current_session_data(now):
+            return "market_closed", False
+        return "previous_session", False
+
+    fresh = LAST_TICK_TS and (time.time() - LAST_TICK_TS) <= TICK_STALE_SEC
+
+    if SEED_IN_PROGRESS:
+        return "seeding", bool(TICKER_CONNECTED and fresh)
+
+    if TICKER_CONNECTED and fresh:
+        return "live", True
+
+    if not _has_current_session_data(now):
+        return "previous_session", False
+
+    return "waiting_for_ticks", False
+
+
+# ----------------------------
+# Numeric helpers
+# ----------------------------
+
 def _as_float(value: Any) -> Optional[float]:
     try:
         number = float(value)
@@ -150,13 +289,17 @@ def _as_float(value: Any) -> Optional[float]:
 
 def _order_book_delta(depth: dict) -> Optional[float]:
     """Return resting bid-vs-ask quantity imbalance from Kite full-mode depth."""
-    buy = sum(_as_float(level.get("quantity")) or 0.0 for level in depth.get("buy", [])[:5])
-    sell = sum(_as_float(level.get("quantity")) or 0.0 for level in depth.get("sell", [])[:5])
+    buy = sum(_as_float(level.get("quantity")) or 0.0 for level in (depth.get("buy") or [])[:5])
+    sell = sum(_as_float(level.get("quantity")) or 0.0 for level in (depth.get("sell") or [])[:5])
     total = buy + sell
     if total <= 0:
         return None
     return (buy - sell) / total
 
+
+# ----------------------------
+# History cache load/save
+# ----------------------------
 
 def _to_ist_series(values: pd.Series) -> pd.Series:
     dates = pd.to_datetime(values, errors="coerce")
@@ -189,6 +332,7 @@ def _load_history_cache() -> bool:
             return False
         if payload.get("version") != 1 or not payload.get("complete"):
             return False
+
         cached_date = date.fromisoformat(str(payload["seed_date"]))
         cached_history = payload.get("history") or {}
         loaded = 0
@@ -197,25 +341,29 @@ def _load_history_cache() -> bool:
                 token = SYMBOL_TO_TOKEN.get(symbol)
                 if not token or not isinstance(histories, dict):
                     continue
-                frames = {name: frame for name, frame in histories.items() if name in {"intraday", "regular"} and isinstance(frame, pd.DataFrame) and not frame.empty}
+                frames = {
+                    name: frame
+                    for name, frame in histories.items()
+                    if name in {"intraday", "regular"} and isinstance(frame, pd.DataFrame) and not frame.empty
+                }
                 if frames:
                     HISTORY[token] = frames
                     loaded += 1
+
         if not loaded:
             return False
+
         HISTORY_SEED_DATE = cached_date
         SEED_REQUESTED_DATE = cached_date
         HISTORY_CACHE_LOADED = True
-        log.info("Loaded persisted history cache for %s symbols from %s", loaded, HISTORY_CACHE_PATH)
+        log.info("Loaded history cache: %s symbols from %s", loaded, HISTORY_CACHE_PATH)
         return True
-    except (OSError, EOFError, KeyError, TypeError, ValueError, AttributeError, pickle.PickleError):
+    except Exception:
         log.exception("Unable to load persisted history cache")
         return False
 
 
-def _save_history_cache() -> None:
-    if not HISTORY_SEED_DATE:
-        return
+def _save_history_cache(seed_date: date) -> None:
     with DATA_LOCK:
         cached_history = {
             TOKEN_TO_SYMBOL[token]: histories
@@ -224,36 +372,48 @@ def _save_history_cache() -> None:
         }
     if not cached_history:
         return
-    payload = {"version": 1, "complete": True, "seed_date": HISTORY_SEED_DATE.isoformat(), "history": cached_history}
+    payload = {"version": 1, "complete": True, "seed_date": seed_date.isoformat(), "history": cached_history}
     temporary_path = HISTORY_CACHE_PATH.with_suffix(".tmp")
     try:
         HISTORY_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
         with temporary_path.open("wb") as handle:
             pickle.dump(payload, handle, protocol=pickle.HIGHEST_PROTOCOL)
         os.replace(temporary_path, HISTORY_CACHE_PATH)
-        log.info("Persisted history cache for %s symbols", len(cached_history))
+        log.info("Persisted history cache: %s symbols", len(cached_history))
     except OSError:
         log.exception("Unable to persist history cache")
 
 
+# ----------------------------
+# Kite init + ticker
+# ----------------------------
+
 def load_instruments() -> None:
     global kite
     if not API_KEY or not ACCESS_TOKEN:
-        log.warning("Kite credentials are missing; the page will remain in demo mode.")
+        log.warning("Kite credentials missing; dashboard stays in demo/offline mode.")
         return
+
     kite = KiteConnect(api_key=API_KEY)
     kite.set_access_token(ACCESS_TOKEN)
+
     frame = pd.DataFrame(kite.instruments("NSE"))
     if frame.empty or "tradingsymbol" not in frame.columns:
         raise RuntimeError("Kite returned no NSE instruments")
+
     frame = frame[frame["tradingsymbol"].isin(ALL_SYMBOLS)].copy()
+
     with DATA_LOCK:
-        SYMBOL_TO_TOKEN.update({row.tradingsymbol: int(row.instrument_token) for row in frame.itertuples()})
-        TOKEN_TO_SYMBOL.update({int(row.instrument_token): row.tradingsymbol for row in frame.itertuples()})
+        SYMBOL_TO_TOKEN.clear()
+        TOKEN_TO_SYMBOL.clear()
+        for row in frame.itertuples(index=False):
+            SYMBOL_TO_TOKEN[str(row.tradingsymbol)] = int(row.instrument_token)
+            TOKEN_TO_SYMBOL[int(row.instrument_token)] = str(row.tradingsymbol)
+
     missing = sorted(set(ALL_SYMBOLS) - set(SYMBOL_TO_TOKEN))
     log.info("Loaded %s/%s NSE symbols", len(SYMBOL_TO_TOKEN), len(ALL_SYMBOLS))
     if missing:
-        log.warning("Symbols not available in NSE instrument list: %s", ", ".join(missing))
+        log.warning("Symbols missing in Kite NSE instruments: %s", ", ".join(missing))
 
 
 def _update_tick(tick: dict) -> None:
@@ -262,15 +422,19 @@ def _update_tick(tick: dict) -> None:
     if token is None or ltp is None or ltp <= 0:
         return
     token = int(token)
+
     ohlc = tick.get("ohlc") or {}
     flow_delta = _order_book_delta(tick.get("depth") or {})
     volume = _as_float(tick.get("volume_traded"))
+
     if volume is None:
         volume = _as_float((TICK_STATE.get(token) or {}).get("volume")) or 0.0
-    timestamp = time.time()
-    TICK_STATE[token] = {"ltp": ltp, "volume": volume, "ohlc": ohlc, "flow_delta": flow_delta, "ts": timestamp}
+
+    ts = time.time()
+    TICK_STATE[token] = {"ltp": ltp, "volume": volume, "ohlc": ohlc, "flow_delta": flow_delta, "ts": ts}
+
     history = PRICE_HISTORY.setdefault(token, deque(maxlen=3600))
-    history.append((timestamp, ltp, volume, flow_delta))
+    history.append((ts, ltp, volume, flow_delta))
 
 
 def _set_ticker_modes(selected_symbols: set[str]) -> None:
@@ -289,15 +453,19 @@ def _set_ticker_modes(selected_symbols: set[str]) -> None:
 
 
 def _start_ticker() -> None:
-    global TICKER_STARTED, TICKER_CONNECTED, TICKER_WS, LAST_TICK_TS
+    global TICKER_STARTED, TICKER_CONNECTED, TICKER_WS
     if TICKER_STARTED or kite is None or not SYMBOL_TO_TOKEN:
         return
+
     TICKER_STARTED = True
     tokens = sorted(TOKEN_TO_SYMBOL)
 
     def run() -> None:
-        global TICKER_CONNECTED, LAST_TICK_TS
+        global TICKER_CONNECTED, TICKER_WS, LAST_TICK_TS, TOTAL_TICKS
+
         while True:
+            closed = threading.Event()
+
             try:
                 ticker = KiteTicker(API_KEY, ACCESS_TOKEN)
 
@@ -306,12 +474,19 @@ def _start_ticker() -> None:
                     TICKER_WS = ws
                     ws.subscribe(tokens)
                     ws.set_mode(ws.MODE_QUOTE, tokens)
+
+                    # FULL mode only for selected detail symbols (may be empty).
                     with DATA_LOCK:
-                        selected_tokens = [SYMBOL_TO_TOKEN[symbol] for symbol in DETAIL_SYMBOLS if symbol in SYMBOL_TO_TOKEN]
+                        selected_tokens = [SYMBOL_TO_TOKEN[s] for s in DETAIL_SYMBOLS if s in SYMBOL_TO_TOKEN]
                     if selected_tokens:
                         ws.set_mode(ws.MODE_FULL, selected_tokens)
+
                     TICKER_CONNECTED = True
-                    log.info("KiteTicker connected: %s quote tokens, %s full-depth tokens", len(tokens), len(selected_tokens))
+                    log.info(
+                        "KiteTicker connected: %s quote tokens, %s full-depth tokens",
+                        len(tokens),
+                        len(selected_tokens),
+                    )
 
                 def on_ticks(_ws, ticks):
                     global LAST_TICK_TS, TOTAL_TICKS
@@ -326,38 +501,61 @@ def _start_ticker() -> None:
                     global TICKER_CONNECTED, TICKER_WS
                     TICKER_CONNECTED = False
                     TICKER_WS = None
-                    log.warning("KiteTicker connection closed")
+                    log.warning("KiteTicker connection closed: %s", _reason)
+                    closed.set()
+
+                def on_error(_ws, _code, _reason):
+                    global TICKER_CONNECTED, TICKER_WS
+                    TICKER_CONNECTED = False
+                    TICKER_WS = None
+                    log.error("KiteTicker error: %s", _reason)
+                    closed.set()
 
                 ticker.on_connect = on_connect
                 ticker.on_ticks = on_ticks
                 ticker.on_close = on_close
-                ticker.connect(threaded=False)
+                ticker.on_error = on_error
+
+                # IMPORTANT: threaded=True avoids Twisted signal handler issues on Render.
+                ticker.connect(threaded=True)
+
+                # IMPORTANT: wait here so we don't spawn infinite tickers.
+                closed.wait()
+                time.sleep(2)
+
             except Exception:
                 TICKER_CONNECTED = False
                 log.exception("KiteTicker stopped; retrying in 5 seconds")
                 time.sleep(5)
 
-
     threading.Thread(target=run, name="kite-ticker", daemon=True).start()
 
+# ----------------------------
+# Fast mode symbol selection / rotation
+# ----------------------------
 
 def _fast_symbol_candidates(include_fallback: bool = True) -> list[str]:
     candidates = []
     with DATA_LOCK:
-        for symbol, token in SYMBOL_TO_TOKEN.items():
-            tick = TICK_STATE.get(token) or {}
-            ltp = _as_float(tick.get("ltp"))
-            ohlc = tick.get("ohlc") if isinstance(tick.get("ohlc"), dict) else {}
-            open_price = _as_float(ohlc.get("open"))
-            volume = _as_float(tick.get("volume")) or 0.0
-            if not ltp or not open_price:
-                continue
-            change = abs((ltp - open_price) / open_price * 100.0)
-            candidates.append((change, volume, symbol))
+        items = list(SYMBOL_TO_TOKEN.items())
+        tick_state = dict(TICK_STATE)
+    for symbol, token in items:
+        tick = tick_state.get(token) or {}
+        ltp = _as_float(tick.get("ltp"))
+        ohlc = tick.get("ohlc") if isinstance(tick.get("ohlc"), dict) else {}
+        open_price = _as_float(ohlc.get("open"))
+        volume = _as_float(tick.get("volume")) or 0.0
+        if not ltp or not open_price:
+            continue
+        change = abs((ltp - open_price) / open_price * 100.0)
+        candidates.append((change, volume, symbol))
+
     candidates.sort(reverse=True)
     selected = [symbol for _, _, symbol in candidates[:FAST_SYMBOL_LIMIT]]
+
     if not include_fallback:
         return selected
+
     fallback = list(dict.fromkeys(SECTOR_DEFINITIONS.get("NIFTY_50", []) + list(ALL_SYMBOLS)))
     for symbol in fallback:
         if len(selected) >= FAST_SYMBOL_LIMIT:
@@ -374,12 +572,14 @@ def _select_fast_symbols() -> list[str]:
         if len(live_selected) >= FAST_SYMBOL_LIMIT or not market_is_open():
             break
         time.sleep(1)
+
     selected = _fast_symbol_candidates()
     with DATA_LOCK:
         DETAIL_SYMBOLS.clear()
         DETAIL_SYMBOLS.update(selected[:FAST_SYMBOL_LIMIT])
         selected_symbols = set(DETAIL_SYMBOLS)
     _set_ticker_modes(selected_symbols)
+
     log.info("Fast mode selected %s/%s symbols for detailed history", len(DETAIL_SYMBOLS), len(SYMBOL_TO_TOKEN))
     return list(DETAIL_SYMBOLS)
 
@@ -398,6 +598,7 @@ def _seed_symbol(symbol: str, token: int) -> None:
             oi=False,
         )
         time.sleep(HISTORY_SLEEP_SEC)
+
         daily = kite.historical_data(
             instrument_token=token,
             from_date=now - timedelta(days=SEED_DAYS_DAILY),
@@ -406,6 +607,7 @@ def _seed_symbol(symbol: str, token: int) -> None:
             continuous=False,
             oi=False,
         )
+
         with DATA_LOCK:
             HISTORY[token] = {"intraday": _normalize_history(five), "regular": _normalize_history(daily)}
     finally:
@@ -416,16 +618,19 @@ def _rotate_fast_symbols() -> None:
     global FAST_SEED_IN_PROGRESS
     if not FAST_MODE or not market_is_open() or not TICKER_CONNECTED:
         return
+
     selected = set(_fast_symbol_candidates())
     with DATA_LOCK:
         current = set(DETAIL_SYMBOLS)
     added = selected - current
     if not added:
         return
+
     _set_ticker_modes(selected)
     FAST_SEED_IN_PROGRESS = True
     rotation_errors = 0
     ready = set()
+
     try:
         for symbol in sorted(added):
             token = SYMBOL_TO_TOKEN.get(symbol)
@@ -438,9 +643,7 @@ def _rotate_fast_symbols() -> None:
                         ready.add(symbol)
             except Exception:
                 rotation_errors += 1
-                log.exception("Fast rotation history seed failed for %s", symbol)
-            finally:
-                pass
+                log.exception("Fast rotation seed failed for %s", symbol)
     finally:
         with DATA_LOCK:
             DETAIL_SYMBOLS.clear()
@@ -448,7 +651,13 @@ def _rotate_fast_symbols() -> None:
             active_symbols = set(DETAIL_SYMBOLS)
         _set_ticker_modes(active_symbols)
         FAST_SEED_IN_PROGRESS = False
-    log.info("Fast mode rotated: %s detailed symbols, %s new histories, %s errors", len(active_symbols), len(ready), rotation_errors)
+
+    log.info(
+        "Fast mode rotated: %s detailed symbols, %s new histories, %s errors",
+        len(active_symbols),
+        len(ready),
+        rotation_errors,
+    )
 
 
 def _start_fast_rotation() -> None:
@@ -468,8 +677,12 @@ def _start_fast_rotation() -> None:
     threading.Thread(target=run, name="fast-rotation", daemon=True).start()
 
 
+# ----------------------------
+# Daily refresh + seeding
+# ----------------------------
+
 def _prepare_for_new_market_day(today: date) -> None:
-    """Reset live ticks while retaining the previous-session cache during reseeding."""
+    """Reset live ticks while retaining the previous-session scan cache during reseeding."""
     global LAST_TICK_TS, TOTAL_TICKS
     with DATA_LOCK:
         PRICE_HISTORY.clear()
@@ -508,26 +721,34 @@ def _start_daily_refresh() -> None:
 
 
 def _start_history_seed(force: bool = False) -> None:
-    global HISTORY_CACHE_LOADED, SEED_IN_PROGRESS, SEED_REQUESTED_DATE, SEED_STARTED, HISTORY_SEED_DATE
-    if SEED_STARTED or kite is None:
-        if not force or kite is None:
-            return
+    """
+    Retry-safe seeding:
+    - SEED_REQUESTED_DATE marks the running/queued seed.
+    - HISTORY_SEED_DATE is only updated after a successful completion.
+    """
+    global HISTORY_CACHE_LOADED, SEED_IN_PROGRESS, SEED_REQUESTED_DATE
+
+    if kite is None:
+        return
+
     if HISTORY_CACHE_LOADED and not force:
         log.info("Using persisted history cache; skipping redundant startup seed")
         return
+
     today = datetime.now(IST).date()
-    if SEED_IN_PROGRESS or HISTORY_SEED_DATE == today or SEED_REQUESTED_DATE == today:
-        log.info("Skipping duplicate history seed request for %s", today.isoformat())
+
+    if SEED_IN_PROGRESS or SEED_REQUESTED_DATE == today:
+        log.info("Skipping duplicate seed request for %s", today.isoformat())
         return
+
     if force:
+        # Force reseed even if cache was loaded.
         HISTORY_CACHE_LOADED = False
-    SEED_STARTED = True
+
     SEED_REQUESTED_DATE = today
-    HISTORY_SEED_DATE = today
     SEED_PROGRESS.update({"done": 0, "total": 0, "errors": 0})
-    if FAST_MODE:
-        SEED_PROGRESS["total"] = FAST_SYMBOL_LIMIT
     SEED_IN_PROGRESS = True
+
     if FAST_MODE:
         selected_symbols = _select_fast_symbols()
     else:
@@ -535,11 +756,13 @@ def _start_history_seed(force: bool = False) -> None:
         with DATA_LOCK:
             DETAIL_SYMBOLS.clear()
             DETAIL_SYMBOLS.update(selected_symbols)
+
     tokens = sorted((token, symbol) for symbol, token in SYMBOL_TO_TOKEN.items() if symbol in selected_symbols)
     SEED_PROGRESS["total"] = len(tokens)
 
     def run() -> None:
-        global HISTORY_CACHE_LOADED, SEED_IN_PROGRESS
+        global HISTORY_CACHE_LOADED, SEED_IN_PROGRESS, HISTORY_SEED_DATE
+        seed_date = today
         try:
             for token, symbol in tokens:
                 try:
@@ -551,15 +774,23 @@ def _start_history_seed(force: bool = False) -> None:
                     SEED_PROGRESS["done"] += 1
         finally:
             SEED_IN_PROGRESS = False
-            if SEED_PROGRESS["errors"] == 0 and SEED_PROGRESS["done"] == SEED_PROGRESS["total"]:
-                _save_history_cache()
+
+            success = (SEED_PROGRESS["errors"] == 0 and SEED_PROGRESS["done"] == SEED_PROGRESS["total"])
+            if success:
+                HISTORY_SEED_DATE = seed_date
+                _save_history_cache(seed_date)
                 HISTORY_CACHE_LOADED = True
             else:
                 HISTORY_CACHE_LOADED = False
+
             _start_fast_rotation()
 
     threading.Thread(target=run, name="history-seed", daemon=True).start()
 
+
+# ----------------------------
+# Indicators
+# ----------------------------
 
 def _ema(values: pd.Series, period: int = 21) -> Optional[float]:
     if values.empty:
@@ -585,7 +816,10 @@ def _adx(frame: pd.DataFrame, period: int = 14) -> Optional[float]:
         return None
     high, low, close = frame["high"], frame["low"], frame["close"]
     previous_close = close.shift(1)
-    true_range = pd.concat([high - low, (high - previous_close).abs(), (low - previous_close).abs()], axis=1).max(axis=1)
+    true_range = pd.concat(
+        [high - low, (high - previous_close).abs(), (low - previous_close).abs()],
+        axis=1,
+    ).max(axis=1)
     up_move = high.diff()
     down_move = -low.diff()
     plus_dm = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
@@ -597,33 +831,42 @@ def _adx(frame: pd.DataFrame, period: int = 14) -> Optional[float]:
     return max(0.0, min(100.0, float(dx.ewm(alpha=1 / period, adjust=False, min_periods=1).mean().iloc[-1])))
 
 
+# ----------------------------
+# Row building
+# ----------------------------
+
 def _history_state(token: int, timeframe: str) -> Optional[tuple[pd.DataFrame, float, float, dict]]:
     with DATA_LOCK:
         frame = HISTORY.get(token, {}).get(timeframe)
         tick = dict(TICK_STATE.get(token) or {})
     if frame is None or frame.empty:
         return None
+
     last = frame.iloc[-1]
     tick_ltp = _as_float(tick.get("ltp"))
     ltp = tick_ltp or _as_float(last.get("close"))
     volume = _as_float(tick.get("volume")) or _as_float(last.get("volume")) or 0.0
     ohlc = tick.get("ohlc") if isinstance(tick.get("ohlc"), dict) else {}
+
     if not ohlc:
         if timeframe == "intraday":
             latest_date = last["date"].date()
             session = frame[frame["date"].dt.date == latest_date]
-            ohlc = {
-                "open": session.iloc[0]["open"],
-                "high": session["high"].max(),
-                "low": session["low"].min(),
-                "close": session.iloc[-1]["close"],
-            }
-            if tick_ltp is None:
-                volume = float(session["volume"].sum())
+            if not session.empty:
+                ohlc = {
+                    "open": session.iloc[0]["open"],
+                    "high": session["high"].max(),
+                    "low": session["low"].min(),
+                    "close": session.iloc[-1]["close"],
+                }
+                if tick_ltp is None:
+                    volume = float(session["volume"].sum())
         else:
             ohlc = {"open": last.get("open"), "high": last.get("high"), "low": last.get("low"), "close": last.get("close")}
+
     if ltp is None:
         return None
+
     return frame.copy(), float(ltp), float(volume), ohlc
 
 
@@ -632,125 +875,201 @@ def _volume_ratio(token: int, timeframe: str, volume: float, now: datetime) -> f
         daily = HISTORY.get(token, {}).get("regular")
     if daily is None or daily.empty:
         return 1.0
+
     daily = daily[daily["volume"] > 0]
     if daily.empty:
         return 1.0
+
     if timeframe == "regular":
         baseline = float(daily["volume"].tail(61).head(60).mean())
         return max(0.0, volume / (baseline + 1e-9))
+
     baseline = float(daily["volume"].tail(20).mean())
     market_open = now.replace(hour=9, minute=15, second=0, microsecond=0)
+
     if not market_is_open(now) or not _has_current_session_data(now):
         elapsed = 375.0
     else:
         elapsed = (now - market_open).total_seconds() / 60.0
         elapsed = max(1.0, min(375.0, elapsed))
+
     expected = baseline * (elapsed / 375.0)
     return max(0.0, volume / (expected + 1e-9))
 
 
+def _clip(value: float, low: float = 0.0, high: float = 1.0) -> float:
+    return max(low, min(high, float(value)))
+
+
+def _daily_atr_percent(token: int) -> float:
+    """Return a prior-session daily ATR percentage without using today's candle."""
+    with DATA_LOCK:
+        daily = HISTORY.get(token, {}).get("regular")
+    if daily is None or daily.empty:
+        return 1.0
+
+    stats = daily[daily["volume"] > 0].copy()
+    if "date" in stats:
+        stats = stats[stats["date"].dt.date < datetime.now(IST).date()]
+    if stats.empty:
+        return 1.0
+
+    previous_close = stats["close"].shift(1)
+    true_range = pd.concat(
+        [stats["high"] - stats["low"], (stats["high"] - previous_close).abs(), (stats["low"] - previous_close).abs()],
+        axis=1,
+    ).max(axis=1)
+    atr_percent = (true_range / stats["close"].replace(0, pd.NA) * 100.0).dropna().tail(20)
+    value = float(atr_percent.mean()) if not atr_percent.empty else 1.0
+    return value if math.isfinite(value) and value > 0 else 1.0
+
+
+def _intraday_volume_ratio(frame: pd.DataFrame, volume: float, now: datetime) -> float:
+    """Compare cumulative volume with the same 5-minute slot on prior sessions."""
+    if frame.empty or "date" not in frame or "volume" not in frame:
+        return 1.0
+
+    intraday = frame[frame["volume"] > 0].copy()
+    if intraday.empty:
+        return 1.0
+
+    sessions = {day: group.sort_values("date") for day, group in intraday.groupby(intraday["date"].dt.date)}
+    if not sessions:
+        return 1.0
+
+    live_session = market_is_open(now) and _has_current_session_data(now)
+    if live_session:
+        reference_date = now.date()
+        slot = int(max(0, (now - now.replace(hour=9, minute=15, second=0, microsecond=0)).total_seconds()) // 300) + 1
+        slot = max(1, min(75, slot))
+    else:
+        reference_date = max(sessions)
+        slot = len(sessions[reference_date])
+
+    baselines = []
+    for day in sorted(day for day in sessions if day < reference_date)[-40:]:
+        cumulative = sessions[day]["volume"].cumsum()
+        if cumulative.empty:
+            continue
+        index = min(slot, len(cumulative)) - 1
+        if index >= 0 and float(cumulative.iloc[index]) > 0:
+            baselines.append(float(cumulative.iloc[index]))
+
+    if len(baselines) < 5:
+        return 1.0
+    expected = float(pd.Series(baselines).median())
+    return max(0.0, float(volume) / (expected + 1e-9)) if expected > 0 else 1.0
+
+
 def _live_candles(token: int, now: datetime) -> list[dict]:
-    """Build rolling 5-minute candles from recent full-mode ticks."""
+    """Build rolling 5-minute candles from recent ticks."""
     market_open = now.replace(hour=9, minute=15, second=0, microsecond=0)
     cutoff = max(market_open.timestamp(), now.timestamp() - 20 * 60)
+
     with DATA_LOCK:
         ticks = list(PRICE_HISTORY.get(token, ()))
+
     buckets: dict[int, dict] = {}
     for tick in ticks:
         timestamp, price, volume = tick[:3]
         flow_delta = tick[3] if len(tick) > 3 else None
         if timestamp < cutoff or timestamp < market_open.timestamp() or price <= 0:
             continue
+
         bucket = int((timestamp - market_open.timestamp()) // 300)
-        candle = buckets.setdefault(bucket, {"open": price, "high": price, "low": price, "close": price, "last_volume": volume, "delta_sum": 0.0, "delta_count": 0})
+        candle = buckets.setdefault(
+            bucket,
+            {"open": price, "high": price, "low": price, "close": price, "last_volume": volume, "delta_sum": 0.0, "delta_count": 0},
+        )
         candle["high"] = max(candle["high"], price)
         candle["low"] = min(candle["low"], price)
         candle["close"] = price
         candle["last_volume"] = volume
+
         if flow_delta is not None:
             candle["delta_sum"] += flow_delta
             candle["delta_count"] += 1
+
     candles = []
     previous_volume = None
     for bucket in sorted(buckets):
         candle = buckets[bucket]
         last_volume = float(candle.get("last_volume") or 0.0)
-        candle_volume = max(0.0, last_volume - previous_volume) if previous_volume is not None else 0.0
+        candle_volume = max(0.0, last_volume - (previous_volume or 0.0)) if previous_volume is not None else 0.0
         flow = candle["delta_sum"] / candle["delta_count"] if candle["delta_count"] else None
         candles.append({**candle, "volume": candle_volume, "flow_delta": flow})
         previous_volume = last_volume
     return candles
 
 
-def _session_trend_quality(
-    frame: pd.DataFrame,
-    ltp: float,
-    change: float,
-    now: datetime,
-    live_candles: Optional[list[dict]] = None,
-) -> float:
-    """Reward a directional 5-minute path and penalize sideways candles."""
+def _session_trend_quality(frame: pd.DataFrame, ltp: float, change: float, now: datetime, live_candles: Optional[list[dict]] = None) -> float:
     if frame.empty:
         return 1.0
     today = frame[frame["date"].dt.date == now.date()]
     if today.empty and not live_candles:
         latest_date = frame.iloc[-1]["date"].date()
         today = frame[frame["date"].dt.date == latest_date]
+
     expected_direction = 1.0 if change >= 0 else -1.0
     quality = 1.0
+
     if not today.empty:
-        values = [_as_float(today.iloc[0]["open"])] + [
-            _as_float(value) for value in today["close"].tolist()
-        ]
-        values = [value for value in values if value is not None and value > 0]
+        values = [_as_float(today.iloc[0]["open"])] + [_as_float(v) for v in today["close"].tolist()]
+        values = [v for v in values if v is not None and v > 0]
         if len(values) >= 2:
             values.append(ltp)
-            meaningful_moves = []
+            meaningful = []
             for previous, current in zip(values, values[1:]):
                 move = (current - previous) / previous * 100.0 * expected_direction
-                meaningful_moves.append(move >= 0.02)
-            if meaningful_moves:
-                continuity = sum(meaningful_moves) / len(meaningful_moves)
-                quality = max(0.05, continuity * continuity)
+                meaningful.append(move >= 0.02)
+            continuity = sum(meaningful) / len(meaningful) if meaningful else 0.0
+            quality = max(0.05, continuity * continuity)
+
     if live_candles and len(live_candles) >= 2:
         live_moves = [
-            ((candle["close"] - candle["open"]) / candle["open"] * 100.0) * expected_direction
-            for candle in live_candles[-3:]
+            ((c["close"] - c["open"]) / c["open"] * 100.0) * expected_direction
+            for c in live_candles[-3:]
+            if c.get("open")
         ]
-        live_continuity = sum(move >= 0.02 for move in live_moves) / len(live_moves)
-        quality = min(quality, max(0.05, live_continuity * live_continuity))
+        if live_moves:
+            live_cont = sum(m >= 0.02 for m in live_moves) / len(live_moves)
+            quality = min(quality, max(0.05, live_cont * live_cont))
+
     return quality
 
 
-def _volume_confirmation(
-    frame: pd.DataFrame,
-    expected_direction: float,
-    now: datetime,
-    live_candles: Optional[list[dict]] = None,
-) -> float:
-    """Reward recent directional candles that are backed by above-baseline volume."""
+def _volume_confirmation(frame: pd.DataFrame, expected_direction: float, now: datetime, live_candles: Optional[list[dict]] = None) -> float:
     if frame.empty:
         return 1.0
+
     intraday = frame[frame["volume"] > 0]
     today = intraday[intraday["date"].dt.date == now.date()]
     session_date = now.date()
-    if today.empty and not live_candles:
-        session_date = intraday.iloc[-1]["date"].date() if not intraday.empty else now.date()
+
+    if today.empty and not live_candles and not intraday.empty:
+        session_date = intraday.iloc[-1]["date"].date()
         today = intraday[intraday["date"].dt.date == session_date]
+
     history = intraday[intraday["date"].dt.date < session_date]
     baseline_source = history["volume"].tail(120) if not history.empty else intraday["volume"].iloc[:-3]
     baseline = float(baseline_source.median()) if not baseline_source.empty else 0.0
     if baseline <= 0:
         return 1.0
-    if live_candles and any(candle["volume"] > 0 for candle in live_candles):
-        recent_candles = live_candles[-3:]
+
+    if live_candles and any((c.get("volume") or 0) > 0 for c in live_candles):
+        recent = live_candles[-3:]
         moves = [
-            ((candle["close"] - candle["open"]) / candle["open"] * 100.0) * expected_direction
-            for candle in recent_candles
+            ((c["close"] - c["open"]) / c["open"] * 100.0) * expected_direction
+            for c in recent
+            if c.get("open")
         ]
-        volumes = [float(candle["volume"]) for candle in recent_candles]
-        directional_rate = sum(move >= 0.02 and volume >= baseline * 0.80 for move, volume in zip(moves, volumes)) / len(recent_candles)
-        recent_volume_ratio = sum(volumes) / len(volumes) / baseline
+        volumes = [float(c.get("volume") or 0.0) for c in recent]
+        if moves and volumes:
+            directional_rate = sum((m >= 0.02) and (v >= baseline * 0.80) for m, v in zip(moves, volumes)) / len(recent)
+            recent_volume_ratio = (sum(volumes) / len(volumes)) / baseline
+        else:
+            directional_rate = 0.0
+            recent_volume_ratio = 1.0
     elif today.empty:
         return 1.0
     else:
@@ -759,6 +1078,7 @@ def _volume_confirmation(
         confirmed = (moves >= 0.02) & (recent["volume"] >= baseline * 0.80)
         directional_rate = float(confirmed.mean()) if len(confirmed) else 0.0
         recent_volume_ratio = float(recent["volume"].mean()) / baseline
+
     activity = min(1.0, recent_volume_ratio / 1.20)
     return max(0.10, min(1.0, 0.20 + directional_rate * 0.55 + activity * 0.25))
 
@@ -769,52 +1089,126 @@ def _sparkline(prices: List[float], positive: bool) -> str:
         return ""
     low, high = min(values), max(values)
     spread = max(high - low, 1e-9)
-    coords = " ".join(f"{i * 18},{24 - ((value - low) / spread) * 19:.1f}" for i, value in enumerate(values))
+    coords = " ".join(f"{i * 18},{24 - ((v - low) / spread) * 19:.1f}" for i, v in enumerate(values))
     color = "#0d9b73" if positive else "#d44e57"
-    return f'<svg class="spark" viewBox="0 0 72 26" aria-label="Five candle trend"><polyline stroke="{color}" points="{coords}"></polyline></svg>'
+    return f'<svg class="spark" viewBox="0 0 72 26" aria-label="Five candle trend"><polyline fill="none" stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" points="{coords}"></polyline></svg>'
 
 
 def _rfactor(token: int, timeframe: str, ltp: float, volume: float, high: float, low: float, change: float) -> float:
-    """Match the RFactor formula from dashboard_clean.py."""
+    # Matches your comment: "dashboard_clean.py" style.
     with DATA_LOCK:
         daily = HISTORY.get(token, {}).get("regular")
     if daily is None or daily.empty:
         return 0.0
+
     stats = daily[daily["volume"] > 0].copy()
     if stats.empty:
         return 0.0
+
+    if "date" in stats:
+        stats = stats[stats["date"].dt.date < datetime.now(IST).date()]
+    if stats.empty:
+        return 0.0
+
     stats["change"] = stats["close"].pct_change() * 100.0
     stats = stats.tail(20)
+
     close = float(ltp or 0.0)
     vol = float(volume or 0.0)
     if vol <= 0 or close <= 0 or stats.empty:
         return 0.0
+
     avg_vol = float(stats["volume"].mean())
     avg_range = float((stats["high"] - stats["low"]).mean())
     avg_move = float(stats["change"].abs().mean())
     baselines = (avg_vol, avg_range, avg_move)
-    if not all(math.isfinite(value) and value > 0 for value in baselines):
+    if not all(math.isfinite(v) and v > 0 for v in baselines):
         return 0.0
+
     rvol = vol / avg_vol
     range_factor = (high - low) / avg_range
     move_factor = abs(change) / avg_move
     raw = (rvol ** 0.55) * (range_factor ** 0.30) * (move_factor ** 0.15)
+
     position = (close - low) / ((high - low) + 1e-9)
     freshness = position ** 3 if change >= 0 else (1.0 - position) ** 3
+
     if (high - low) / close * 100.0 < 0.60:
         raw *= 0.12
+
     raw *= max(freshness, 0.001)
     return round(3.5 * math.log1p(max(raw, 0.0)), 2)
+
+
+def _advanced_score(row: dict, relative_strength: float = 0.5) -> float:
+    """Build a bounded, direction-aware score from normalized components."""
+    direction = 1.0 if float(row.get("direction") or 1.0) > 0 else -1.0
+    change = abs(float(row.get("change") or 0.0))
+    atr_percent = max(float(row.get("atrPercent") or 1.0), 0.25)
+    return_component = _clip(change / atr_percent / 2.0)
+
+    time_volume_ratio = max(float(row.get("timeVolumeRatio") or 1.0), 0.05)
+    slot_volume_component = _clip(0.5 + 0.20 * math.log(time_volume_ratio, 2.0))
+    volume_component = 0.55 * slot_volume_component + 0.45 * _clip(float(row.get("volumeConfirm") or 0.5))
+
+    recent_alignment = direction * float(row.get("recent") or 0.0)
+    recent_component = _clip(0.5 + 0.25 * recent_alignment)
+    continuation_component = 0.60 * _clip(float(row.get("trendQuality") or 0.5)) + 0.40 * recent_component
+    adx_component = _clip((float(row.get("adx") or 10.0) - 10.0) / 30.0)
+    ema_alignment = 0.5 + direction * float(row.get("ema") or 0.0) / 5.0
+    trend_component = 0.60 * adx_component + 0.40 * _clip(ema_alignment)
+
+    flow_delta = row.get("buySellDelta")
+    flow_component = 0.5 if flow_delta is None else _clip(0.5 + 0.40 * direction * float(flow_delta))
+    rfactor_component = _clip(float(row.get("rfactor") or 0.0) / 4.0)
+
+    return round(100.0 * (
+        0.25 * return_component
+        + 0.20 * volume_component
+        + 0.15 * continuation_component
+        + 0.15 * trend_component
+        + 0.10 * _clip(relative_strength)
+        + 0.10 * flow_component
+        + 0.05 * rfactor_component
+    ), 4)
+
+
+def _apply_advanced_scores(rows: List[dict]) -> List[dict]:
+    """Add cross-sectional sector and market relative strength before ranking."""
+    if not rows:
+        return rows
+
+    market_mean = sum(float(row.get("change") or 0.0) for row in rows) / len(rows)
+    sector_values: Dict[str, List[float]] = {}
+    for row in rows:
+        sector_values.setdefault(str(row.get("sector") or "UNKNOWN"), []).append(float(row.get("change") or 0.0))
+    sector_means = {sector: sum(values) / len(values) for sector, values in sector_values.items() if values}
+    dispersion = sum(abs(float(row.get("change") or 0.0) - market_mean) for row in rows) / len(rows)
+    scale = max(0.25, dispersion * 1.5)
+
+    for row in rows:
+        direction = 1.0 if float(row.get("direction") or 1.0) > 0 else -1.0
+        change = float(row.get("change") or 0.0)
+        sector_mean = sector_means.get(str(row.get("sector") or "UNKNOWN"), market_mean)
+        sector_edge = direction * (change - sector_mean)
+        market_edge = direction * (change - market_mean)
+        relative_strength = 0.60 * _clip(0.5 + 0.25 * sector_edge / scale) + 0.40 * _clip(0.5 + 0.25 * market_edge / scale)
+        row["sectorRelative"] = round(sector_edge, 2)
+        row["marketRelative"] = round(market_edge, 2)
+        row["score"] = _advanced_score(row, relative_strength)
+    return rows
 
 
 def _build_row(symbol: str, sector: str, timeframe: str) -> Optional[dict]:
     token = SYMBOL_TO_TOKEN.get(symbol)
     if not token:
         return None
-    state = _history_state(token, timeframe)
-    if state is None:
+
+    hs = _history_state(token, timeframe)
+    if hs is None:
         return None
-    frame, ltp, volume, ohlc = state
+
+    frame, ltp, volume, ohlc = hs
     open_price = _as_float(ohlc.get("open")) or _as_float(frame.iloc[-1]["open"])
     day_high = _as_float(ohlc.get("high")) or _as_float(frame.iloc[-1]["high"])
     day_low = _as_float(ohlc.get("low")) or _as_float(frame.iloc[-1]["low"])
@@ -830,12 +1224,14 @@ def _build_row(symbol: str, sector: str, timeframe: str) -> Optional[dict]:
     closes = pd.to_numeric(frame["close"], errors="coerce").dropna()
     close_values = closes.tolist() + [ltp]
     indicator_closes = pd.Series(close_values, dtype="float64")
+
     indicator_frame = frame[["high", "low", "close"]].copy()
     live_row = indicator_frame.iloc[-1].copy()
     live_row["high"] = max(float(live_row["high"]), ltp)
     live_row["low"] = min(float(live_row["low"]), ltp)
     live_row["close"] = ltp
     indicator_frame = pd.concat([indicator_frame.iloc[:-1], pd.DataFrame([live_row])], ignore_index=True)
+
     rsi = _rsi(indicator_closes)
     adx = _adx(indicator_frame)
     ema = _ema(indicator_closes)
@@ -844,7 +1240,10 @@ def _build_row(symbol: str, sector: str, timeframe: str) -> Optional[dict]:
 
     now = datetime.now(IST)
     ratio = _volume_ratio(token, timeframe, volume, now)
+    atr_percent = _daily_atr_percent(token)
+    time_volume_ratio = _intraday_volume_ratio(frame, volume, now) if timeframe == "intraday" else ratio
     ema_gap = (ltp - ema) / ema * 100.0
+
     live_candles = _live_candles(token, now) if timeframe == "intraday" else []
     recent_change = 0.0
     if len(live_candles) >= 2:
@@ -852,31 +1251,25 @@ def _build_row(symbol: str, sector: str, timeframe: str) -> Optional[dict]:
         recent_change = (ltp - recent_base) / recent_base * 100.0
     elif len(close_values) >= 4 and close_values[-4]:
         recent_change = (ltp - close_values[-4]) / close_values[-4] * 100.0
-    aligned_recent = recent_change if change >= 0 else -recent_change
-    freshness = max(0.25, min(1.0, 0.25 + max(0.0, aligned_recent) / 0.80))
-    effective_ratio = min(ratio, 1.0) + max(ratio - 1.0, 0.0) * freshness
+
     expected_direction = 1.0 if change >= 0 else -1.0
     trend_quality = _session_trend_quality(frame, ltp, change, now, live_candles) if timeframe == "intraday" else 1.0
     volume_quality = _volume_confirmation(frame, expected_direction, now, live_candles) if timeframe == "intraday" else 1.0
-    flow_values = [candle["flow_delta"] for candle in live_candles[-3:] if candle.get("flow_delta") is not None]
+
+    flow_values = [c.get("flow_delta") for c in live_candles[-3:] if c.get("flow_delta") is not None]
     buy_sell_delta = sum(flow_values) / len(flow_values) if flow_values else None
-    flow_alignment = expected_direction * buy_sell_delta if buy_sell_delta is not None else 0.0
-    flow_quality = max(0.70, min(1.20, 1.0 + 0.20 * flow_alignment)) if buy_sell_delta is not None else 1.0
-    stale_trend = (
-        abs(change) * 0.40
-        + effective_ratio * 1.6
-        + max(0.0, adx - 18.0) / 12.0
-        + abs(ema_gap) * 0.20
-        + abs(rsi - 50.0) / 24.0 * 0.35
-    )
+
     rfactor = _rfactor(token, timeframe, ltp, volume, day_high, day_low, change)
-    rfactor_quality = max(0.0, min(1.0, rfactor / 4.0))
     continuation_quality = max(0.05, min(1.0, trend_quality * volume_quality))
-    base_score = max(0.0, aligned_recent) * 2.3 + stale_trend * (0.35 + 0.65 * freshness)
-    score = base_score * continuation_quality * (0.65 + 0.35 * rfactor_quality) * flow_quality
-    volatility = "high" if abs(change) >= 2.5 or abs(ema_gap) >= 2.5 else "medium" if abs(change) >= 1.0 or abs(ema_gap) >= 1.2 else "low"
+
+    volatility = (
+        "high" if abs(change) >= 2.5 or abs(ema_gap) >= 2.5
+        else "medium" if abs(change) >= 1.0 or abs(ema_gap) >= 1.2
+        else "low"
+    )
     positive = change >= 0
-    return {
+
+    row = {
         "symbol": symbol,
         "display": symbol,
         "ltp": round(ltp, 2),
@@ -890,16 +1283,20 @@ def _build_row(symbol: str, sector: str, timeframe: str) -> Optional[dict]:
         "buySellDelta": round(buy_sell_delta, 2) if buy_sell_delta is not None else None,
         "volume": round((ratio - 1.0) * 100.0, 2),
         "ratio": round(ratio, 2),
+        "timeVolumeRatio": round(time_volume_ratio, 2),
+        "atrPercent": round(atr_percent, 2),
         "rsi": round(rsi, 1),
         "adx": round(adx, 1),
         "ema": round(ema_gap, 2),
-        "score": round(score, 4),
+        "score": 0.0,
         "rfactor": rfactor,
         "volatility": volatility,
         "rank": 0,
         "spark": _sparkline(close_values, positive),
         "isIndex": False,
     }
+    row["score"] = _advanced_score(row)
+    return row
 
 
 INDEX_GROUPS = {
@@ -921,15 +1318,17 @@ def _aggregate_index(name: str, rows: List[dict]) -> Optional[dict]:
     total_weight = sum(weights)
 
     def average(key: str) -> float:
-        return sum(float(row.get(key) or 0.0) * weight for row, weight in zip(rows, weights)) / total_weight
+        return sum(float(row.get(key) or 0.0) * w for row, w in zip(rows, weights)) / total_weight
 
     change = average("change")
     ltp = average("ltp")
     ratio = average("ratio")
     ema = average("ema")
     score = average("score")
+
     strongest = max(rows, key=lambda row: float(row.get("score") or 0.0))
     volatility = "high" if abs(change) >= 1.8 else "medium" if abs(change) >= 0.8 else "low"
+
     return {
         "symbol": name,
         "display": name,
@@ -970,7 +1369,6 @@ def _rank(rows: List[dict]) -> List[dict]:
     rows[:] = _directional_rank(rows, "score")
     for row in rows:
         row["_scan_score"] = row.get("score")
-        row.pop("score", None)
     return rows
 
 
@@ -978,25 +1376,28 @@ def build_rows(timeframe: str, universe: str, sector: str) -> List[dict]:
     sector = sector.upper()
     with DATA_LOCK:
         detail_symbols = set(DETAIL_SYMBOLS)
+
     if universe == "index":
         rows = []
         for name, symbols in INDEX_GROUPS.items():
-            selected = [symbol for symbol in dict.fromkeys(symbols) if not FAST_MODE or symbol in detail_symbols]
-            children = [_build_row(symbol, "INDEX", timeframe) for symbol in selected]
-            aggregate = _aggregate_index(name, [row for row in children if row])
+            selected = [s for s in dict.fromkeys(symbols) if (not FAST_MODE or s in detail_symbols)]
+            children = _apply_advanced_scores([row for row in (_build_row(s, "INDEX", timeframe) for s in selected) if row])
+            aggregate = _aggregate_index(name, [r for r in children if r])
             if aggregate:
                 rows.append(aggregate)
-        return _rank(rows)
+        return _rank(_apply_advanced_scores(rows))
 
     membership: Dict[str, str] = {}
     for group, symbols in SECTOR_DEFINITIONS.items():
         for symbol in symbols:
             membership.setdefault(symbol, group)
+
     symbols = list(dict.fromkeys(SECTOR_DEFINITIONS.get(sector, []))) if sector != "ALL" else list(membership)
     if FAST_MODE:
-        symbols = [symbol for symbol in symbols if symbol in detail_symbols]
+        symbols = [s for s in symbols if s in detail_symbols]
+
     rows = [_build_row(symbol, membership.get(symbol, sector), timeframe) for symbol in symbols]
-    return _rank([row for row in rows if row])
+    return _rank(_apply_advanced_scores([row for row in rows if row]))
 
 
 def _rows_from_cache(timeframe: str, universe: str, sector: str) -> List[dict]:
@@ -1011,16 +1412,96 @@ def _rows_from_cache(timeframe: str, universe: str, sector: str) -> List[dict]:
     return rows
 
 
+def build_sector_flow(rows: Optional[List[dict]] = None) -> List[dict]:
+    membership: Dict[str, str] = {}
+    for group, symbols in SECTOR_DEFINITIONS.items():
+        for symbol in symbols:
+            membership.setdefault(symbol, group)
+
+    score_by_symbol = {str(row.get("symbol")): row for row in (rows or []) if row.get("symbol")}
+    grouped: Dict[str, dict] = {}
+    now = datetime.now(IST)
+    with DATA_LOCK:
+        ticks = {symbol: dict(TICK_STATE.get(token) or {}) for symbol, token in SYMBOL_TO_TOKEN.items()}
+
+    for symbol, tick in ticks.items():
+        sector = membership.get(symbol)
+        if not sector:
+            continue
+        ltp = _as_float(tick.get("ltp"))
+        ohlc = tick.get("ohlc") if isinstance(tick.get("ohlc"), dict) else {}
+        open_price = _as_float(ohlc.get("open"))
+        if not ltp or not open_price:
+            continue
+        change = (ltp - open_price) / open_price * 100.0
+        token = SYMBOL_TO_TOKEN.get(symbol)
+        volume_ratio = None
+        if token:
+            with DATA_LOCK:
+                daily = HISTORY.get(token, {}).get("regular")
+            if daily is not None and not daily.empty:
+                volume_ratio = _volume_ratio(token, "intraday", _as_float(tick.get("volume")) or 0.0, now)
+
+        group = grouped.setdefault(
+            sector,
+            {
+                "name": sector,
+                "sum": 0.0,
+                "volume_ratio_sum": 0.0,
+                "volume_ratio_count": 0,
+                "dir_score_sum": 0.0,
+                "score_count": 0,
+                "count": 0,
+                "up": 0,
+                "down": 0,
+            },
+        )
+        group["sum"] += change
+        if volume_ratio is not None:
+            group["volume_ratio_sum"] += volume_ratio
+            group["volume_ratio_count"] += 1
+        score_row = score_by_symbol.get(symbol)
+        if score_row is not None:
+            direction = 1.0 if float(score_row.get("direction") or 1.0) > 0 else -1.0
+            group["dir_score_sum"] += direction * float(score_row.get("score") or 0.0)
+            group["score_count"] += 1
+        group["count"] += 1
+        group["up"] += int(change >= 0)
+        group["down"] += int(change < 0)
+
+    def mean(item: dict) -> float:
+        return item["sum"] / max(item["count"], 1)
+
+    return [
+        {
+            "name": group["name"],
+            "mean": round(mean(group), 2),
+            "volume_ratio_mean": round(
+                group["volume_ratio_sum"] / group["volume_ratio_count"], 2
+            )
+            if group["volume_ratio_count"]
+            else None,
+            "dirRScore": round(group["dir_score_sum"] / group["score_count"], 2)
+            if group["score_count"]
+            else None,
+            "count": group["count"],
+            "up": group["up"],
+            "down": group["down"],
+        }
+        for group in sorted(grouped.values(), key=mean, reverse=True)
+    ]
+
+
 def _refresh_scan_cache() -> None:
-    snapshots = {
-        timeframe: {
+    global SCAN_CACHE_UPDATED_AT
+    snapshots = {}
+    for timeframe in ("intraday", "regular"):
+        snapshots[timeframe] = {
             "stocks": build_rows(timeframe, "stocks", "ALL"),
             "index": build_rows(timeframe, "index", "ALL"),
         }
-        for timeframe in ("intraday", "regular")
-    }
-    sector_flow = build_sector_flow()
-    global SCAN_CACHE_UPDATED_AT
+    sector_flow = build_sector_flow(snapshots["intraday"]["stocks"])
+
     with SCAN_CACHE_LOCK:
         for timeframe, universes in snapshots.items():
             SCAN_CACHE[timeframe]["stocks"] = universes["stocks"]
@@ -1050,136 +1531,157 @@ def _start_scan_compute() -> None:
     threading.Thread(target=run, name="scan-compute", daemon=True).start()
 
 
-def build_sector_flow() -> List[dict]:
-    membership: Dict[str, str] = {}
-    for group, symbols in SECTOR_DEFINITIONS.items():
-        for symbol in symbols:
-            membership.setdefault(symbol, group)
-    grouped: Dict[str, dict] = {}
-    with DATA_LOCK:
-        ticks = {symbol: dict(TICK_STATE.get(token) or {}) for symbol, token in SYMBOL_TO_TOKEN.items()}
-    for symbol, tick in ticks.items():
-        sector = membership.get(symbol)
-        if not sector:
-            continue
-        ltp = _as_float(tick.get("ltp"))
-        ohlc = tick.get("ohlc") if isinstance(tick.get("ohlc"), dict) else {}
-        open_price = _as_float(ohlc.get("open"))
-        if not ltp or not open_price:
-            continue
-        change = (ltp - open_price) / open_price * 100.0
-        group = grouped.setdefault(sector, {"name": sector, "sum": 0.0, "count": 0, "up": 0, "down": 0})
-        group["sum"] += change
-        group["count"] += 1
-        group["up"] += int(change >= 0)
-        group["down"] += int(change < 0)
-    return [
-        {
-            "name": group["name"],
-            "mean": round(group["sum"] / max(group["count"], 1), 2),
-            "count": group["count"],
-            "up": group["up"],
-            "down": group["down"],
-        }
-        for group in sorted(grouped.values(), key=lambda item: item["sum"] / max(item["count"], 1), reverse=True)
-    ]
+# ----------------------------
+# Live initialization (lazy, safe under Gunicorn)
+# ----------------------------
+
+def initialize_live() -> None:
+    """Start live services once per process."""
+    global LIVE_INITIALIZED
+    with LIVE_INIT_LOCK:
+        if LIVE_INITIALIZED:
+            return
+        LIVE_INITIALIZED = True
+
+    _start_scan_compute()
+
+    try:
+        load_instruments()
+        if kite is not None and SYMBOL_TO_TOKEN:
+            if not _load_history_cache():
+                _start_history_seed(force=False)
+            _start_ticker()
+        else:
+            log.warning("Live init: instruments not loaded (missing credentials or symbols).")
+    except Exception:
+        log.exception("Live market startup failed; serving UI without live feed")
+    finally:
+        _start_daily_refresh()
 
 
-def _feed_status() -> tuple[str, bool]:
-    if kite is None or not SYMBOL_TO_TOKEN:
-        return "missing_credentials", False
-    if not market_is_open():
-        return "previous_session", False
-    fresh = LAST_TICK_TS and (time.time() - LAST_TICK_TS) <= TICK_STALE_SEC
-    if SEED_IN_PROGRESS:
-        return "seeding", bool(TICKER_CONNECTED and fresh)
-    if TICKER_CONNECTED and fresh:
-        return "live", True
-    if not _has_current_session_data():
-        return "previous_session", False
-    return "waiting_for_ticks", False
+def ensure_live_started() -> None:
+    # Avoid starting background threads at import-time; start on first request.
+    if not LIVE_INITIALIZED:
+        initialize_live()
 
+
+# ----------------------------
+# Routes
+# ----------------------------
 
 @app.get("/")
 def index():
+    ensure_live_started()
     return send_file(BASE_DIR / "intraday-momentum-scanner.html")
-
-
-@app.get("/numbers.txt")
-def numbers():
-    return send_file(BASE_DIR / "numbers.txt", mimetype="text/plain")
 
 
 @app.post("/api/access/login")
 def access_login():
+    ensure_live_started()
     payload = request.get_json(silent=True) or {}
     phone = normalize_access_number(payload.get("phone"))
     session_id = clean_env(str(payload.get("session_id", "")))
+
     if not phone or not session_id:
         return jsonify({"ok": False, "error": "invalid_request"}), 400
-    if phone not in allowed_access_numbers():
+
+    allowlist = allowed_access_numbers()
+    if phone not in allowlist:
         return jsonify({"ok": False, "error": "not_allowed"}), 403
+
+    now = time.time()
+    _prune_sessions(now)
+
     with ACCESS_SESSION_LOCK:
-        current_session = ACTIVE_ACCESS_SESSIONS.get(phone)
-        if current_session and current_session != session_id:
+        current = ACTIVE_ACCESS_SESSIONS.get(phone)
+        if current and current.get("session_id") != session_id:
             return jsonify({"ok": False, "error": "already_logged_in"}), 409
-        ACTIVE_ACCESS_SESSIONS[phone] = session_id
+        ACTIVE_ACCESS_SESSIONS[phone] = {"session_id": session_id, "ts": now}
+
     return jsonify({"ok": True})
 
 
 @app.post("/api/access/logout")
 def access_logout():
+    ensure_live_started()
     payload = request.get_json(silent=True) or {}
     phone = normalize_access_number(payload.get("phone"))
     session_id = clean_env(str(payload.get("session_id", "")))
     with ACCESS_SESSION_LOCK:
-        if ACTIVE_ACCESS_SESSIONS.get(phone) == session_id:
+        record = ACTIVE_ACCESS_SESSIONS.get(phone)
+        if record and record.get("session_id") == session_id:
             ACTIVE_ACCESS_SESSIONS.pop(phone, None)
     return jsonify({"ok": True})
 
 
 @app.get("/api/health")
 def health():
+    ensure_live_started()
     status, live = _feed_status()
-    return jsonify({
-        "status": status,
-        "live": live,
-        "market_open": market_is_open(),
-        "seed": dict(SEED_PROGRESS),
-        "symbols": len(SYMBOL_TO_TOKEN),
-        "fast_mode": FAST_MODE,
-        "detail_symbols": len(DETAIL_SYMBOLS),
-        "ticks": TOTAL_TICKS,
-        "last_tick": datetime.fromtimestamp(LAST_TICK_TS, IST).isoformat() if LAST_TICK_TS else None,
-        "cache_ready": bool(SCAN_CACHE_UPDATED_AT),
-        "cache_updated_at": datetime.fromtimestamp(SCAN_CACHE_UPDATED_AT, IST).isoformat() if SCAN_CACHE_UPDATED_AT else None,
-        "history_cache_loaded": HISTORY_CACHE_LOADED,
-        "history_seed_date": HISTORY_SEED_DATE.isoformat() if HISTORY_SEED_DATE else None,
-        "seed_requested_date": SEED_REQUESTED_DATE.isoformat() if SEED_REQUESTED_DATE else None,
-    })
+    return jsonify(
+        {
+            "status": status,
+            "live": live,
+            "market_open": market_is_open(),
+            "seed": dict(SEED_PROGRESS),
+            "symbols": len(SYMBOL_TO_TOKEN),
+            "fast_mode": FAST_MODE,
+            "detail_symbols": len(DETAIL_SYMBOLS),
+            "ticks": TOTAL_TICKS,
+            "last_tick": datetime.fromtimestamp(LAST_TICK_TS, IST).isoformat() if LAST_TICK_TS else None,
+            "cache_ready": bool(SCAN_CACHE_UPDATED_AT),
+            "cache_updated_at": datetime.fromtimestamp(SCAN_CACHE_UPDATED_AT, IST).isoformat() if SCAN_CACHE_UPDATED_AT else None,
+            "history_cache_loaded": HISTORY_CACHE_LOADED,
+            "history_seed_date": HISTORY_SEED_DATE.isoformat() if HISTORY_SEED_DATE else None,
+            "seed_requested_date": SEED_REQUESTED_DATE.isoformat() if SEED_REQUESTED_DATE else None,
+        }
+    )
 
 
 @app.get("/api/scan")
 def scan():
+    ensure_live_started()
+
+    # Auth (required)
     phone = normalize_access_number(request.args.get("access_phone"))
     session_id = clean_env(request.args.get("access_session_id", ""))
     if not access_session_is_active(phone, session_id):
         return jsonify({"error": "access_required"}), 403
+
     timeframe = request.args.get("type", "intraday").lower()
     universe = request.args.get("universe", "stocks").lower()
     sector = request.args.get("sector", "all").upper()
+
     if timeframe not in {"intraday", "regular"}:
         return jsonify({"error": "type must be intraday or regular"}), 400
     if universe not in {"stocks", "index"}:
         return jsonify({"error": "universe must be stocks or index"}), 400
     if sector not in SECTOR_DEFINITIONS and sector != "ALL":
         sector = "ALL"
-    rows = _rows_from_cache(timeframe, universe, sector)
+
+    # Limit (bandwidth control)
+    try:
+        limit = int(request.args.get("limit", str(DEFAULT_SCAN_LIMIT)))
+    except ValueError:
+        limit = DEFAULT_SCAN_LIMIT
+    limit = max(1, min(MAX_SCAN_LIMIT, limit))
+
     with SCAN_CACHE_LOCK:
-        sector_flow = [dict(item) for item in SECTOR_FLOW_CACHE]
         cache_updated_at = SCAN_CACHE_UPDATED_AT
+        sector_flow = [dict(item) for item in SECTOR_FLOW_CACHE]
+
+    # ETag / 304 (saves bandwidth if client revalidates)
+    etag = f'W/"scan-{timeframe}-{universe}-{sector}-{limit}-{int(cache_updated_at)}"'
+    if request.headers.get("If-None-Match") == etag and cache_updated_at:
+        resp = Response(status=304)
+        resp.headers["ETag"] = etag
+        resp.headers["Cache-Control"] = "private, max-age=0, must-revalidate"
+        return resp
+
+    rows = _rows_from_cache(timeframe, universe, sector)[:limit]
     status, live = _feed_status()
-    return jsonify({
+
+    payload = {
         "live": live,
         "status": status,
         "market_open": market_is_open(),
@@ -1191,27 +1693,17 @@ def scan():
         "sector_flow": sector_flow,
         "ticks": TOTAL_TICKS,
         "rows": rows,
-    })
+    }
+
+    resp = jsonify(payload)
+    resp.headers["ETag"] = etag
+    resp.headers["Cache-Control"] = "private, max-age=0, must-revalidate"
+    return resp
 
 
-def initialize_live() -> None:
-    """Start live services once for both Python and Gunicorn entrypoints."""
-    global LIVE_INITIALIZED
-    with LIVE_INIT_LOCK:
-        if LIVE_INITIALIZED:
-            return
-        LIVE_INITIALIZED = True
-    _start_scan_compute()
-    try:
-        load_instruments()
-        if not _load_history_cache():
-            _start_history_seed()
-        _start_ticker()
-    except Exception:
-        log.exception("Live market startup failed; serving demo UI")
-    finally:
-        _start_daily_refresh()
-
+# ----------------------------
+# Local dev entrypoint
+# ----------------------------
 
 def start() -> None:
     initialize_live()
@@ -1220,5 +1712,3 @@ def start() -> None:
 
 if __name__ == "__main__":
     start()
-else:
-    threading.Thread(target=initialize_live, name="live-init", daemon=True).start()
