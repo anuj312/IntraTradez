@@ -428,6 +428,14 @@ tbody tr:hover { background: #fafcfd; }
 
 .leader-column-head .leader-average { color: #6d7d91; font-size: 9px; font-weight: 800; white-space: nowrap; }
 
+.leader-column-head .leader-average { display: inline-flex; align-items: center; gap: 5px; min-height: 24px; padding: 4px 9px 4px 8px; border: 1px solid #cfe3dc; border-radius: 999px; background: linear-gradient(135deg, #f2fffa, #e5f8f0); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .88), 0 4px 10px rgba(38, 122, 91, .08); color: #087252; font-size: 8px; font-weight: 850; letter-spacing: .015em; font-variant-numeric: tabular-nums; }
+
+.leader-column-head .leader-average::before { width: 5px; height: 5px; flex: 0 0 5px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 3px rgba(8, 114, 82, .10); content: ""; }
+
+.losers .leader-column-head .leader-average { border-color: #f0d2d7; background: linear-gradient(135deg, #fff7f8, #fdecef); color: #a5303c; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .9), 0 4px 10px rgba(174, 57, 72, .08); }
+
+.losers .leader-column-head .leader-average::before { box-shadow: 0 0 0 3px rgba(165, 48, 60, .10); }
+
 .leader-column-head > span:last-child { color: #91a0b3; font-size: 9px; font-weight: 800; }
 
 .leader-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 4px var(--green-soft); }
@@ -1120,7 +1128,10 @@ top: 28%;
   body.theme-dark .stock-sector, body.theme-dark .leader-sector { color: #8fa0ba; }
   body.theme-dark .leaders-head { border-color: #2d3d57; }
   body.theme-dark .leader-column-head { color: #d2ddec; }
-  body.theme-dark .leader-column-head .leader-average { color: #aab9ce; }
+  body.theme-dark .leader-column-head .leader-average { border-color: #285e50; background: linear-gradient(135deg, #173d35, #15322f); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05), 0 5px 14px rgba(0, 0, 0, .18); color: #92edc7; }
+  body.theme-dark .leader-column-head .leader-average::before { box-shadow: 0 0 0 3px rgba(146, 237, 199, .12); }
+  body.theme-dark .losers .leader-column-head .leader-average { border-color: #6b3742; background: linear-gradient(135deg, #43252f, #351f2a); color: #ffabb7; }
+  body.theme-dark .losers .leader-column-head .leader-average::before { box-shadow: 0 0 0 3px rgba(255, 171, 183, .12); }
   body.theme-dark .leader-column + .leader-column { border-color: #2d3d57; }
   body.theme-dark .leader-table tbody tr { border-color: #263650; }
   body.theme-dark .leader-table .leader-score, body.theme-dark .score-panel .leader-score { color: #ffffff; }
@@ -1141,6 +1152,7 @@ top: 28%;
   body.theme-dark .access-form input { color: #edf3ff; background: #17243a; border-color: #405675; }
   body.theme-dark .access-form input::placeholder { color: #9aa9bf; }
   @media (max-width: 520px) { .sector-modal-columns, .sector-stock-row { grid-template-columns: minmax(0, 1fr) 72px 72px; gap: 8px; padding-right: 12px; padding-left: 12px; } .sector-modal-columns { font-size: 8px; } .sector-stock-row, .sector-modal-ratio, .sector-stock-score { font-size: 11px; } .sector-stock-name { font-size: 13px; } }
+  @media (max-width: 520px) { .leader-column-head { gap: 4px; } .leader-column-head .leader-average { min-height: 21px; padding: 3px 6px; font-size: 7px; } .leader-column-head .leader-average::before { width: 4px; height: 4px; flex-basis: 4px; box-shadow: 0 0 0 2px rgba(8, 114, 82, .10); } }
 </style>
 
 </head>
@@ -1583,7 +1595,7 @@ METAL: ["ADANIENT", "APLAPOLLO", "BHARATFORG", "COALINDIA", "HINDALCO", "HINDZIN
 
 REALTY: ["PHOENIXLTD", "GODREJPROP", "LODHA", "OBEROIRLTY", "DLF", "PRESTIGE", "NBCC", "RVNL"],
 
-ENERGY: ["RELIANCE", "ONGC", "IOC", "BPCL", "OIL", "NTPC", "POWERGRID", "POWERINDIA", "TATAPOWER", "JSWENERGY", "ADANIGREEN", "ADANIENSOL", "NHPC", "IREDA", "SUZLON", "INOXWIND", "WAAREEENER", "PREMIERENE", "PETRONET", "GAIL", "HINDPETRO"],
+ENERGY: ["RELIANCE", "ONGC", "IOC", "BPCL", "OIL", "NTPC", "POWERGRID", "POWERINDIA", "TATAPOWER", "JSWENERGY", "ADANIGREEN", "ADANIENSOL", "ADANIPOWER", "NHPC", "IREDA", "SUZLON", "INOXWIND", "WAAREEENER", "PREMIERENE", "PETRONET", "GAIL", "HINDPETRO"],
 
 AUTO: ["BOSCHLTD", "TIINDIA", "HEROMOTOCO", "M&M", "EICHERMOT", "BAJAJ-AUTO", "ASHOKLEY", "MARUTI", "TVSMOTOR", "MOTHERSON", "SONACOMS", "UNOMINDA", "TMPV", "HYUNDAI", "AMBER"],
 
