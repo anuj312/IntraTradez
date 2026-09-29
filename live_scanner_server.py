@@ -110,6 +110,8 @@ if Compress is not None:
 kite: Optional[KiteConnect] = None
 SYMBOL_TO_TOKEN: Dict[str, int] = {}
 TOKEN_TO_SYMBOL: Dict[int, str] = {}
+INDEX_TO_TOKEN: Dict[str, int] = {}
+INDEX_TOKEN_TO_SYMBOL: Dict[int, str] = {}
 
 TICK_STATE: Dict[int, Dict[str, Any]] = {}
 PRICE_HISTORY: Dict[int, deque] = {}
@@ -275,6 +277,24 @@ def _feed_status() -> tuple[str, bool]:
     return "waiting_for_ticks", False
 
 
+def _official_nifty_quote() -> Optional[dict]:
+    """Return the live NIFTY 50 quote when Kite exposes the NSE index token."""
+    with DATA_LOCK:
+        token = INDEX_TO_TOKEN.get("NIFTY 50")
+        tick = dict(TICK_STATE.get(token) or {}) if token else {}
+    ltp = _as_float(tick.get("ltp"))
+    ohlc = tick.get("ohlc") if isinstance(tick.get("ohlc"), dict) else {}
+    open_price = _as_float(ohlc.get("open"))
+    if not ltp or not open_price:
+        return None
+    return {
+        "symbol": "NIFTY 50",
+        "ltp": round(ltp, 2),
+        "change": round((ltp - open_price) / (open_price + 1e-9) * 100.0, 2),
+        "updated_at": datetime.fromtimestamp(float(tick.get("ts") or 0.0), IST).isoformat() if tick.get("ts") else None,
+    }
+
+
 # ----------------------------
 # Numeric helpers
 # ----------------------------
@@ -401,17 +421,26 @@ def load_instruments() -> None:
     if frame.empty or "tradingsymbol" not in frame.columns:
         raise RuntimeError("Kite returned no NSE instruments")
 
-    frame = frame[frame["tradingsymbol"].isin(ALL_SYMBOLS)].copy()
+    stock_frame = frame[frame["tradingsymbol"].isin(ALL_SYMBOLS)].copy()
+    index_frame = frame[frame["tradingsymbol"].isin({"NIFTY 50", "NIFTY50"})].copy()
 
     with DATA_LOCK:
         SYMBOL_TO_TOKEN.clear()
         TOKEN_TO_SYMBOL.clear()
-        for row in frame.itertuples(index=False):
+        INDEX_TO_TOKEN.clear()
+        INDEX_TOKEN_TO_SYMBOL.clear()
+        for row in stock_frame.itertuples(index=False):
             SYMBOL_TO_TOKEN[str(row.tradingsymbol)] = int(row.instrument_token)
             TOKEN_TO_SYMBOL[int(row.instrument_token)] = str(row.tradingsymbol)
+        for row in index_frame.itertuples(index=False):
+            name = "NIFTY 50" if str(row.tradingsymbol) in {"NIFTY 50", "NIFTY50"} else None
+            if name and name not in INDEX_TO_TOKEN:
+                INDEX_TO_TOKEN[name] = int(row.instrument_token)
+                INDEX_TOKEN_TO_SYMBOL[int(row.instrument_token)] = name
 
     missing = sorted(set(ALL_SYMBOLS) - set(SYMBOL_TO_TOKEN))
     log.info("Loaded %s/%s NSE symbols", len(SYMBOL_TO_TOKEN), len(ALL_SYMBOLS))
+    log.info("Loaded official index quotes: %s", ", ".join(sorted(INDEX_TO_TOKEN)) or "none")
     if missing:
         log.warning("Symbols missing in Kite NSE instruments: %s", ", ".join(missing))
 
@@ -440,7 +469,7 @@ def _update_tick(tick: dict) -> None:
 def _set_ticker_modes(selected_symbols: set[str]) -> None:
     with DATA_LOCK:
         ticker_ws = TICKER_WS
-        all_tokens = sorted(TOKEN_TO_SYMBOL)
+        all_tokens = sorted(set(TOKEN_TO_SYMBOL) | set(INDEX_TOKEN_TO_SYMBOL))
         selected_tokens = [SYMBOL_TO_TOKEN[symbol] for symbol in selected_symbols if symbol in SYMBOL_TO_TOKEN]
     if not ticker_ws:
         return
@@ -458,7 +487,7 @@ def _start_ticker() -> None:
         return
 
     TICKER_STARTED = True
-    tokens = sorted(TOKEN_TO_SYMBOL)
+    tokens = sorted(set(TOKEN_TO_SYMBOL) | set(INDEX_TOKEN_TO_SYMBOL))
 
     def run() -> None:
         global TICKER_CONNECTED, TICKER_WS, LAST_TICK_TS, TOTAL_TICKS
@@ -897,6 +926,46 @@ def _volume_ratio(token: int, timeframe: str, volume: float, now: datetime) -> f
     return max(0.0, volume / (expected + 1e-9))
 
 
+def _trend_features(frame: pd.DataFrame, ltp: float, now: datetime) -> dict:
+    """Return session VWAP and 5m/15m EMA alignment for regime detection."""
+    empty = {"vwapGap": None, "emaTrend5": None, "emaTrend15": None}
+    if frame.empty or "date" not in frame:
+        return empty
+
+    current = frame[frame["date"].dt.date == now.date()].copy()
+    if current.empty:
+        latest_date = frame["date"].dt.date.max()
+        current = frame[frame["date"].dt.date == latest_date].copy()
+    if current.empty:
+        return empty
+
+    current = current.sort_values("date")
+    closes = pd.to_numeric(current["close"], errors="coerce").dropna().astype(float)
+    if closes.empty or not ltp:
+        return empty
+    closes.iloc[-1] = float(ltp)
+
+    ema_fast = _ema(closes, 9)
+    ema_slow = _ema(closes, 21)
+    trend5 = ((ema_fast - ema_slow) / ltp * 100.0) if ema_fast is not None and ema_slow is not None else None
+
+    buckets = current.assign(_bucket=current["date"].dt.floor("15min")).groupby("_bucket", sort=True)["close"].last()
+    buckets = pd.to_numeric(buckets, errors="coerce").dropna().astype(float)
+    if not buckets.empty:
+        buckets.iloc[-1] = float(ltp)
+    ema15_fast = _ema(buckets, 3) if len(buckets) >= 2 else None
+    ema15_slow = _ema(buckets, 8) if len(buckets) >= 2 else None
+    trend15 = ((ema15_fast - ema15_slow) / ltp * 100.0) if ema15_fast is not None and ema15_slow is not None else None
+
+    volume = pd.to_numeric(current["volume"], errors="coerce").fillna(0.0).clip(lower=0.0)
+    typical = (pd.to_numeric(current["high"], errors="coerce") + pd.to_numeric(current["low"], errors="coerce") + pd.to_numeric(current["close"], errors="coerce")) / 3.0
+    total_volume = float(volume.sum())
+    vwap = float((typical * volume).sum() / total_volume) if total_volume > 0 else None
+    vwap_gap = ((ltp - vwap) / vwap * 100.0) if vwap and vwap > 0 else None
+
+    return {"vwapGap": vwap_gap, "emaTrend5": trend5, "emaTrend15": trend15}
+
+
 def _clip(value: float, low: float = 0.0, high: float = 1.0) -> float:
     return max(low, min(high, float(value)))
 
@@ -1239,6 +1308,7 @@ def _build_row(symbol: str, sector: str, timeframe: str) -> Optional[dict]:
         return None
 
     now = datetime.now(IST)
+    trend_features = _trend_features(frame, ltp, now)
     ratio = _volume_ratio(token, timeframe, volume, now)
     atr_percent = _daily_atr_percent(token)
     time_volume_ratio = _intraday_volume_ratio(frame, volume, now) if timeframe == "intraday" else ratio
@@ -1284,6 +1354,9 @@ def _build_row(symbol: str, sector: str, timeframe: str) -> Optional[dict]:
         "volume": round((ratio - 1.0) * 100.0, 2),
         "ratio": round(ratio, 2),
         "timeVolumeRatio": round(time_volume_ratio, 2),
+        "vwapGap": round(trend_features["vwapGap"], 2) if trend_features["vwapGap"] is not None else None,
+        "emaTrend5": round(trend_features["emaTrend5"], 3) if trend_features["emaTrend5"] is not None else None,
+        "emaTrend15": round(trend_features["emaTrend15"], 3) if trend_features["emaTrend15"] is not None else None,
         "atrPercent": round(atr_percent, 2),
         "rsi": round(rsi, 1),
         "adx": round(adx, 1),
@@ -1325,6 +1398,9 @@ def _aggregate_index(name: str, rows: List[dict]) -> Optional[dict]:
     ratio = average("ratio")
     ema = average("ema")
     score = average("score")
+    vwap_gap = average("vwapGap")
+    ema_trend5 = average("emaTrend5")
+    ema_trend15 = average("emaTrend15")
 
     strongest = max(rows, key=lambda row: float(row.get("score") or 0.0))
     volatility = "high" if abs(change) >= 1.8 else "medium" if abs(change) >= 0.8 else "low"
@@ -1338,6 +1414,9 @@ def _aggregate_index(name: str, rows: List[dict]) -> Optional[dict]:
         "change": round(change, 2),
         "volume": round((ratio - 1.0) * 100.0, 2),
         "ratio": round(ratio, 2),
+        "vwapGap": round(vwap_gap, 2),
+        "emaTrend5": round(ema_trend5, 3),
+        "emaTrend15": round(ema_trend15, 3),
         "rsi": round(average("rsi"), 1),
         "adx": round(average("adx"), 1),
         "ema": round(ema, 2),
@@ -1690,6 +1769,7 @@ def scan():
         "fast_mode": FAST_MODE,
         "universe_size": len(SYMBOL_TO_TOKEN),
         "detail_symbols": len(DETAIL_SYMBOLS),
+        "nifty_index": _official_nifty_quote(),
         "sector_flow": sector_flow,
         "ticks": TOTAL_TICKS,
         "rows": rows,

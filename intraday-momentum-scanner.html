@@ -164,6 +164,22 @@ h1 { font-size: clamp(25px, 3vw, 34px); line-height: 1.05; letter-spacing: -.055
 
 .summary-foot.down { color: var(--red); font-weight: 700; }
 
+.nifty-regime-card { --regime-accent: #68778d; --regime-bg: linear-gradient(135deg, #f7f9fc, #eef3f8); --regime-border: #d9e3ee; --regime-text: #203653; display: inline-flex; flex: 0 1 auto; min-width: 0; align-items: center; gap: 7px; min-height: 31px; margin: 0; padding: 7px 12px; border: 1px solid var(--regime-border); border-radius: 99px; background: var(--regime-bg); color: var(--regime-text); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .82), 0 5px 14px rgba(31, 62, 96, .06); transition: background .2s ease, border-color .2s ease, box-shadow .2s ease; }
+
+.nifty-regime-card[data-regime="bullish"], .nifty-regime-card[data-regime="turning-bullish"] { --regime-accent: #078968; --regime-bg: linear-gradient(135deg, #f1fff9, #e2f8ee); --regime-border: #b9e8d3; }
+
+.nifty-regime-card[data-regime="bearish"], .nifty-regime-card[data-regime="turning-bearish"] { --regime-accent: #c23d51; --regime-bg: linear-gradient(135deg, #fff8f9, #fdebed); --regime-border: #f0cbd2; }
+
+.nifty-regime-orb { width: 6px; height: 6px; flex: 0 0 6px; border-radius: 50%; background: var(--regime-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--regime-accent) 14%, transparent); }
+
+.nifty-regime-copy { display: flex; min-width: 0; align-items: baseline; gap: 0; flex-wrap: nowrap; }
+
+.nifty-regime-kicker { display: none; }
+
+.nifty-regime-label { overflow: hidden; color: var(--regime-text); font-size: 10px; font-weight: 900; letter-spacing: .03em; text-overflow: ellipsis; white-space: nowrap; }
+
+.nifty-regime-meta { display: none; }
+
 .content-grid { display: grid; grid-template-columns: minmax(0, 1fr) 360px; align-items: stretch; gap: 18px; }
 
 .content-grid > .panel { display: flex; height: 780px; min-height: 0; flex-direction: column; }
@@ -627,6 +643,12 @@ body.access-granted .access-cta { display: none; }
 .summary-card { padding: 13px; min-height: 98px; }
 
 .summary-value { font-size: 21px; }
+
+.nifty-regime-card { align-items: center; max-width: 100%; padding: 7px 10px; }
+
+.nifty-regime-label { max-width: calc(100vw - 52px); font-size: 9px; }
+
+.nifty-regime-meta { width: auto; }
 
 .flow-head { padding-left: 14px; padding-right: 14px; }
 
@@ -1118,6 +1140,11 @@ top: 28%;
   body.theme-dark .summary-card { background: linear-gradient(145deg, rgba(24, 39, 63, .98), rgba(16, 29, 49, .94)); border-color: #2d3d57; box-shadow: 0 10px 24px rgba(0, 0, 0, .2); }
   body.theme-dark .summary-label, body.theme-dark .summary-foot { color: #9aa9bf; }
   body.theme-dark .summary-value { color: #f0f5ff; }
+  body.theme-dark .nifty-regime-card { --regime-text: #edf3ff; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05), 0 8px 20px rgba(0, 0, 0, .18); }
+  body.theme-dark .nifty-regime-card[data-regime="waiting"] { --regime-bg: linear-gradient(135deg, #17243a, #132238); --regime-border: #334760; }
+  body.theme-dark .nifty-regime-card[data-regime="bullish"], body.theme-dark .nifty-regime-card[data-regime="turning-bullish"] { --regime-bg: linear-gradient(135deg, #173e36, #15322f); --regime-border: #2b6b59; }
+  body.theme-dark .nifty-regime-card[data-regime="bearish"], body.theme-dark .nifty-regime-card[data-regime="turning-bearish"] { --regime-bg: linear-gradient(135deg, #452630, #351f2a); --regime-border: #70404b; }
+  body.theme-dark .nifty-regime-meta { color: #9aa9bf; }
   body.theme-dark .panel { background: #111d31; border-color: #2d3d57; box-shadow: 0 24px 55px rgba(0, 0, 0, .24), 0 2px 4px rgba(0, 0, 0, .18); }
   body.theme-dark .panel-head { background: linear-gradient(135deg, rgba(23, 38, 62, .98), rgba(16, 29, 49, .94)); border-color: #2d3d57; }
   body.theme-dark .panel-title, body.theme-dark .side-title { color: #edf3ff; }
@@ -1207,6 +1234,22 @@ top: 28%;
 </div>
 
 <div class="top-actions">
+
+<div class="nifty-regime-card" id="niftyRegimeCard" data-regime="waiting" role="status" aria-live="polite" title="Waiting for live NIFTY 50 breadth and volume data">
+
+<span class="nifty-regime-orb"></span>
+
+<div class="nifty-regime-copy">
+
+<span class="nifty-regime-kicker">NIFTY 50 REGIME</span>
+
+<strong class="nifty-regime-label" id="niftyRegimeText">NIFTY REGIME WAITING</strong>
+
+<span class="nifty-regime-meta" id="niftyRegimeMeta">Waiting for live NIFTY 50 breadth and volume data</span>
+
+</div>
+
+</div>
 
 <span class="feed-chip" id="feedChip"><span class="feed-chip-dot"></span><span id="feedChipText">Offline</span></span>
 
@@ -1681,6 +1724,8 @@ currentRows: [],
 sectorFlow: null,
 
 ticks: null,
+
+niftyIndex: null,
 
 seedProgress: { done: 0, total: 0, errors: 0 },
 
@@ -2207,6 +2252,368 @@ const averageSell = averageRatio(sellUniverse);
 document.getElementById("gainersAverage").textContent = averageBuy === null ? "Avg Buy Volm —" : `Avg Buy Volm ${formatNumber(averageBuy, 2)}×`;
 
 document.getElementById("losersAverage").textContent = averageSell === null ? "Avg Sell Volm —" : `Avg Sell Volm ${formatNumber(averageSell, 2)}×`;
+
+}
+
+
+
+const NIFTY_REGIME_STORAGE_KEY = "niftyRegimeState";
+
+let niftyRegimeMemory = (() => {
+
+try {
+
+const stored = JSON.parse(sessionStorage.getItem(NIFTY_REGIME_STORAGE_KEY) || "null");
+
+return stored && stored.session === niftySessionDate() ? stored : null;
+
+} catch (error) {
+
+return null;
+
+}
+
+})();
+
+
+
+function niftySessionDate() {
+
+return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+
+}
+
+
+
+function setNiftyRegimeWaiting(message = "Waiting for live NIFTY 50 breadth and volume data") {
+
+const card = document.getElementById("niftyRegimeCard");
+
+card.dataset.regime = "waiting";
+
+document.getElementById("niftyRegimeText").textContent = "NIFTY REGIME WAITING";
+
+document.getElementById("niftyRegimeMeta").textContent = message;
+
+card.title = message;
+
+}
+
+
+
+function niftySnapshot(allRows) {
+
+const indexRow = allRows.find(row => ["NIFTY 50", "NIFTY50"].includes(String(row.symbol)));
+
+if (state.universe === "index" && indexRow) {
+
+const change = Number.isFinite(Number(state.niftyIndex?.change)) ? Number(state.niftyIndex.change) : Number(indexRow.change);
+
+const ratio = Number(indexRow.ratio);
+
+const score = Number(indexRow.score);
+
+if (!Number.isFinite(change)) return null;
+
+return {
+
+change,
+
+ratio,
+
+score,
+
+breadth: null,
+
+vwapBreadth: null,
+
+emaBreadth: null,
+
+sectorBreadth: null,
+
+up: null,
+
+down: null,
+
+total: null,
+
+buyRatio: null,
+
+sellRatio: null,
+
+leadership: null,
+
+vwapGap: Number(indexRow.vwapGap),
+
+emaTrend5: Number(indexRow.emaTrend5),
+
+emaTrend15: Number(indexRow.emaTrend15)
+
+};
+
+}
+
+const symbols = new Set(SECTOR_DEFINITIONS.NIFTY_50 || []);
+
+const rows = allRows.filter(row => symbols.has(String(row.symbol)) && Number.isFinite(Number(row.change)) && Number.isFinite(Number(row.ratio)));
+
+if (!rows.length) return null;
+
+const mean = (values) => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+
+const changes = rows.map(row => Number(row.change));
+
+const upRows = rows.filter(row => Number(row.change) > 0);
+
+const downRows = rows.filter(row => Number(row.change) < 0);
+
+const buyRatios = upRows.map(row => Number(row.ratio));
+
+const sellRatios = downRows.map(row => Number(row.ratio));
+
+const scores = rows.map(row => Number(row.score)).filter(Number.isFinite);
+
+const meanFinite = key => mean(rows.map(row => Number(row[key])).filter(Number.isFinite));
+
+const vwapRows = rows.filter(row => Number.isFinite(Number(row.vwapGap)));
+
+const vwapUp = vwapRows.filter(row => Number(row.vwapGap) > 0).length;
+
+const vwapDown = vwapRows.filter(row => Number(row.vwapGap) < 0).length;
+
+const emaRows = rows.filter(row => Number.isFinite(Number(row.emaTrend5)) && Number.isFinite(Number(row.emaTrend15)));
+
+const emaUp = emaRows.filter(row => Number(row.emaTrend5) > 0 && Number(row.emaTrend15) > 0).length;
+
+const emaDown = emaRows.filter(row => Number(row.emaTrend5) < 0 && Number(row.emaTrend15) < 0).length;
+
+const sectorGroups = new Map();
+
+rows.forEach(row => {
+
+const sector = String(row.sector || "UNKNOWN");
+
+const values = sectorGroups.get(sector) || [];
+
+values.push(Number(row.change));
+
+sectorGroups.set(sector, values);
+
+});
+
+const sectorMeans = [...sectorGroups.values()].map(values => mean(values)).filter(Number.isFinite);
+
+const sectorsUp = sectorMeans.filter(value => value > 0).length;
+
+const sectorsDown = sectorMeans.filter(value => value < 0).length;
+
+const buyRatio = mean(buyRatios);
+
+const sellRatio = mean(sellRatios);
+
+return {
+
+change: Number.isFinite(Number(state.niftyIndex?.change)) ? Number(state.niftyIndex.change) : mean(changes),
+
+ratio: mean(rows.map(row => Number(row.ratio))),
+
+score: mean(scores),
+
+breadth: (upRows.length - downRows.length) / rows.length,
+
+vwapBreadth: vwapRows.length ? (vwapUp - vwapDown) / vwapRows.length : null,
+
+emaBreadth: emaRows.length ? (emaUp - emaDown) / emaRows.length : null,
+
+sectorBreadth: sectorMeans.length ? (sectorsUp - sectorsDown) / sectorMeans.length : null,
+
+up: upRows.length,
+
+down: downRows.length,
+
+total: rows.length,
+
+buyRatio,
+
+sellRatio,
+
+leadership: Number.isFinite(buyRatio) && Number.isFinite(sellRatio) ? buyRatio - sellRatio : null,
+
+vwapGap: meanFinite("vwapGap"),
+
+emaTrend5: meanFinite("emaTrend5"),
+
+emaTrend15: meanFinite("emaTrend15")
+
+};
+
+}
+
+
+
+function classifyNifty(snapshot, previousSnapshot, previousBias) {
+
+let bullishVotes = 0;
+
+let bearishVotes = 0;
+
+if (snapshot.change > 0.05) bullishVotes += 1;
+
+if (snapshot.change < -0.05) bearishVotes += 1;
+
+if (Number.isFinite(snapshot.breadth)) {
+
+if (snapshot.breadth >= 0.10) bullishVotes += 1;
+
+if (snapshot.breadth <= -0.10) bearishVotes += 1;
+
+}
+
+if (Number.isFinite(snapshot.vwapBreadth)) {
+
+if (snapshot.vwapBreadth >= 0.10) bullishVotes += 1;
+
+if (snapshot.vwapBreadth <= -0.10) bearishVotes += 1;
+
+}
+
+if (Number.isFinite(snapshot.emaBreadth)) {
+
+if (snapshot.emaBreadth >= 0.10) bullishVotes += 1;
+
+if (snapshot.emaBreadth <= -0.10) bearishVotes += 1;
+
+}
+
+if (Number.isFinite(snapshot.sectorBreadth)) {
+
+if (snapshot.sectorBreadth >= 0.20) bullishVotes += 1;
+
+if (snapshot.sectorBreadth <= -0.20) bearishVotes += 1;
+
+}
+
+if (Number.isFinite(snapshot.buyRatio) && Number.isFinite(snapshot.sellRatio)) {
+
+if (snapshot.buyRatio > snapshot.sellRatio + 0.05) bullishVotes += 1;
+
+if (snapshot.sellRatio > snapshot.buyRatio + 0.05) bearishVotes += 1;
+
+}
+
+if (Number.isFinite(snapshot.leadership)) {
+
+if (snapshot.leadership >= 0.05) bullishVotes += 1;
+
+if (snapshot.leadership <= -0.05) bearishVotes += 1;
+
+}
+
+if (previousSnapshot && Number.isFinite(previousSnapshot.change)) {
+
+if (snapshot.change > previousSnapshot.change + 0.03) bullishVotes += 1;
+
+if (snapshot.change < previousSnapshot.change - 0.03) bearishVotes += 1;
+
+}
+
+if (previousSnapshot && Number.isFinite(previousSnapshot.leadership) && Number.isFinite(snapshot.leadership)) {
+
+if (snapshot.leadership > previousSnapshot.leadership + 0.05) bullishVotes += 1;
+
+if (snapshot.leadership < previousSnapshot.leadership - 0.05) bearishVotes += 1;
+
+}
+
+const confidence = Math.min(100, Math.round(Math.max(bullishVotes, bearishVotes) / 9 * 100));
+
+const bias = bullishVotes > bearishVotes ? "bullish" : bearishVotes > bullishVotes ? "bearish" : previousBias || (snapshot.change >= 0 ? "bullish" : "bearish");
+
+return { bias, confidence, bullishVotes, bearishVotes };
+
+}
+
+
+
+function updateNiftyRegime(allRows) {
+
+if (!state.liveRows) {
+
+setNiftyRegimeWaiting();
+
+return;
+
+}
+
+const snapshot = niftySnapshot(allRows);
+
+if (!snapshot) {
+
+setNiftyRegimeWaiting(state.universe === "stocks" && state.sector !== "all" && state.sector !== "NIFTY_50" ? "Select All sectors or NIFTY 50 to calculate the regime" : "NIFTY 50 data is still loading");
+
+return;
+
+}
+
+const fingerprint = [state.niftyIndex?.change, snapshot.change, snapshot.ratio, snapshot.breadth, snapshot.vwapBreadth, snapshot.emaBreadth, snapshot.sectorBreadth, snapshot.leadership, snapshot.score].map(value => Number.isFinite(Number(value)) ? Number(value).toFixed(3) : "na").join("|");
+
+const session = niftySessionDate();
+
+if (!niftyRegimeMemory || niftyRegimeMemory.session !== session || niftyRegimeMemory.fingerprint !== fingerprint) {
+
+const candidate = classifyNifty(snapshot, niftyRegimeMemory?.snapshot, niftyRegimeMemory?.bias);
+
+const candidateCount = niftyRegimeMemory?.candidate === candidate.bias ? Number(niftyRegimeMemory.candidateCount || 0) + 1 : 1;
+
+const previousBias = niftyRegimeMemory?.bias;
+
+const confirmed = !previousBias || candidate.bias === previousBias || candidateCount >= 2;
+
+const bias = confirmed ? candidate.bias : previousBias;
+
+const display = confirmed && previousBias && previousBias !== bias ? `turning-${bias}` : bias;
+
+niftyRegimeMemory = { session, fingerprint, bias, display, snapshot, candidate: candidate.bias, candidateCount, confidence: candidate.confidence };
+
+try { sessionStorage.setItem(NIFTY_REGIME_STORAGE_KEY, JSON.stringify(niftyRegimeMemory)); } catch (error) { /* Storage is optional. */ }
+
+}
+
+const labels = {
+
+bullish: "NIFTY BULLISH",
+
+bearish: "NIFTY BEARISH",
+
+"turning-bullish": "NIFTY TURNING BULLISH FROM BEARISH",
+
+"turning-bearish": "NIFTY TURNING BEARISH FROM BULLISH"
+
+};
+
+const card = document.getElementById("niftyRegimeCard");
+
+card.dataset.regime = niftyRegimeMemory.display;
+
+document.getElementById("niftyRegimeText").textContent = labels[niftyRegimeMemory.display];
+
+const meta = [`${signed(snapshot.change, 2)}%`];
+
+if (snapshot.total) meta.push(`${Math.round(snapshot.up / snapshot.total * 100)}% advancing`);
+
+if (Number.isFinite(snapshot.buyRatio) && Number.isFinite(snapshot.sellRatio)) meta.push(`Buy ${formatNumber(snapshot.buyRatio, 2)}× · Sell ${formatNumber(snapshot.sellRatio, 2)}×`);
+
+else if (Number.isFinite(snapshot.ratio)) meta.push(`Vol ${formatNumber(snapshot.ratio, 2)}×`);
+
+if (Number.isFinite(snapshot.vwapBreadth)) meta.push(`VWAP breadth ${signed(snapshot.vwapBreadth * 100, 0)}%`);
+
+if (Number.isFinite(snapshot.emaTrend5) && Number.isFinite(snapshot.emaTrend15)) meta.push(`Trend ${signed(snapshot.emaTrend5, 2)} / ${signed(snapshot.emaTrend15, 2)}`);
+
+meta.push(`Confidence ${niftyRegimeMemory.confidence}%`);
+
+document.getElementById("niftyRegimeMeta").textContent = meta.join(" · ");
+
+card.title = meta.join(" · ");
 
 }
 
@@ -2740,6 +3147,8 @@ const allRows = state.liveRows ? state.liveRows : rankRows(buildRows());
 
 state.currentRows = allRows;
 
+updateNiftyRegime(allRows);
+
 
 
 const filtered = getFilteredRows(allRows);
@@ -2940,6 +3349,8 @@ if (typeof payload.fast_mode === "boolean") state.fastMode = payload.fast_mode;
 if (Number.isFinite(Number(payload.universe_size))) state.universeSize = Number(payload.universe_size);
 
 if (Number.isFinite(Number(payload.detail_symbols))) state.detailSymbols = Number(payload.detail_symbols);
+
+state.niftyIndex = payload.nifty_index && Number.isFinite(Number(payload.nifty_index.change)) ? payload.nifty_index : null;
 
 
 
