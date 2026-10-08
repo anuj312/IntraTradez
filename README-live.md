@@ -1,75 +1,67 @@
-# Live Momentum Scanner
+# Trend Hunter — upgraded scanner
 
-This folder now contains a browser UI plus a small Kite-backed server. The server keeps Kite credentials on the backend and exposes only calculated scanner rows to the page.
+**Dashboard note (2026-10-08):** The Live Signal Intelligence strip and its Replay 5m / Futures OI controls have been removed from the dashboard. The underlying analytics and optional backend endpoints remain available, but are no longer displayed as a card. Top Gainers/Losers, Volume Ratio, and % Change remain 7-row scrollable leaderboards (up to 15 each).
 
-## Start locally
+## What changed
 
-From this folder:
+- **Market candles:** KiteTicker cumulative-volume ticks are converted into 5-minute OHLCV buckets. Only completed candles are saved to indicator history. A current, incomplete candle is used in live indicator calculations but is not persisted as a finished candle.
+- **One seed + incremental recovery:** First startup downloads 45 calendar days of 5m bars and 120 days of daily bars. A complete snapshot is saved to `SCANNER_DATA_DIR/history-cache.pkl` after seeding, refreshed every five minutes and when sessions roll. Later startup and market-day reconnects fetch *missing* bars rather than reloading all the same old history. The restored original Render setup has no mounted disk; use SCANNER_DATA_DIR and mount storage separately if you want persistence across restarts.
+- **Time-matched volume:** Prior-session 5m cumulative volume, with a 30-trading-session median and a minimum of five sessions, determines `timeVolumeRatio`. Without sufficient baseline, the internal neutral fallback is 1; consider this an unavailable/low-confidence baseline, not strong evidence of normal activity.
+- **Sectors:** NIFTY 50 is an index membership list, not a primary industry sector. A stock may belong to multiple filters. Sector Pulse calculates independent up/down participation, mean % change, mean volume ratio, signed score, leaders, and supports clicking for all group members.
+- **Sector constituents:** Click any sector bar to see stock names, volume ratios and momentum scores. The intrusive stock-name hover candlestick chart and diagnostic text have been removed. Clicking a stock row still opens TradingView.
+- **Intelligence:** 5-, 15-, and 30-minute momentum; score acceleration over elapsed 5/15/30min snapshots; one-way consistency/pullbacks; ORB 15m and previous-day range crossings requiring relative volume confirmation; and explanations of weighted score components. Indicators are estimates; they are not trading recommendations.
+- **Depth vs execution:** `depthImbalance` is the resting top-five bid/ask quantity imbalance. It is **not** true aggressor-side executed volume. Deprecated `buySellDelta` is null.
+- **Live integrity:** UI stays blank/offline until authenticated real data arrives. Show last tick time and separate live/previous-session/seeding statuses. No fabricated live feed.
+- **Backtesting:** `/api/replay` uses already-seeded historical 5m candles to replay a historical day, with simplified score and forward 5/15/30m percentage returns **as evaluation labels only**. This is not a historical reconstruction of the live tick score or order flow; it does not calculate fills, transaction costs, slippage, or out-of-sample statistical significance.
+- **Optional near-expiry futures:** `ENABLE_FUTURES_OI=true` fetches FUTSTK instruments (NFO) and subscribes their full quote to monitor price/OI movements. Classification baseline is the **first observed tick of the market session**, not necessarily yesterday's official OI. Do not confuse it with a verified exchange-level institutional net position.
+- **Authentication (restored):** `numbers.txt` allowlist only, as in the original project. Users enter their registered phone number; the original per-phone single-active-session ID mechanism is retained. **No OTP, SMS, Twilio or cookie-based authentication.** Phone number knowledge alone is not identity verification.
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements-live.txt
-export KITE_API_KEY="your_kite_api_key"
-export KITE_ACCESS_TOKEN="your_daily_access_token"
-python3 live_scanner_server.py
-```
+## Trend Hunter / SPECTRA premium interface
 
-Open `http://127.0.0.1:8050/` in a browser. Do not open the HTML file directly if you want live values; the page must be served by `live_scanner_server.py` so it can call `/api/scan`.
+The scanner includes a new premium trading-terminal skin with midnight-blue backgrounds, lavender/cyan details, positive/negative market accents, responsive KPI and leaderboard cards, a polished sector constituent dialog, and a refined phone-number login surface. The light/dark toggle is preserved; it starts in dark mode unless the browser previously selected light. `numbers.txt` remains the only login allowlist.
 
-## What the server does
+To customize the design, edit `premium-terminal.css` then run `python scripts/sync_premium_css.py`. The script embeds the CSS in `intraday-momentum-scanner.html`, avoiding any need to change the original Flask routes or Render configuration.
 
-- Loads the supplied NSE sector universe from `sector_definitions.py`.
-- By default, watches and calculates detailed indicators for every stock in the configured NSE universe.
-- Sector flow is calculated separately from quote ticks across the whole NSE universe.
-- Uses Kite historical candles to seed 5-minute and daily indicators.
-- Uses KiteTicker full-mode ticks for current price, volume, and five-point sparklines.
-- Calculates RSI, ADX, 21 EMA distance, time-adjusted volume ratio, recent-bar continuation, session trend quality, volume confirmation, RFactor, volatility bucket, and momentum rank. RFactor matches the supplied `dashboard_clean.py` formula: 20-session volume/range/move baselines, 0.55/0.30/0.15 weighting, price-position freshness, narrow-range penalty, and logarithmic scaling. RFactor and directional continuation directly affect rank, so an early spike loses rank when the stock goes sideways instead of continuing.
-- Calculates and exposes a live RFactor value; click any Sector flow bar to see its stocks sorted by composite Score. Sector flow has button controls for average percentage change, average intraday volume ratio, or directional Score (`dirRScore`). All modes use automatic spacing; Score mode treats bullish stock Scores as positive and bearish stock Scores as negative. Sector bars stay on one line without horizontal scrolling.
-- Provides a Volm Ratio view with positive-%CHG stocks in Top Gainers and negative-%CHG stocks in Top Decliners; both lists are sorted by VolmRatio high-to-low and show the first 10 rows before scrolling.
-- Provides a `% Change` view below Volm Ratio with the top 15 positive and negative percentage movers; gainers are sorted highest-to-lowest `%CHG` and decliners lowest-to-highest `%CHG`. Each row shows `% Change`, Momentum, and VolmRatio.
-- The live Score uses time-of-day cumulative volume versus prior sessions, ATR-normalized movement, continuation, ADX/EMA trend alignment, sector and market relative strength, fresh order-flow imbalance, and a limited RFactor contribution. Scores are bounded to a 0-100 style range and use prior daily candles for baselines.
-- The main Momentum Scanner top gainers and losers are sorted by composite Score and display Score instead of positional rank. Their headers also show the universe-wide average VolmRatio for all positive and all negative stocks, independent of search filters or the visible top rows. In `FAST_MODE`, these averages reflect the detailed symbols currently returned by the fast rotation. The dedicated `% Change` view ranks positive and negative movers separately by price change, keeping the first 15 on each side.
-- Shows one compact NIFTY 50 Regime pill in the header action row. It combines the official NIFTY 50 quote when available, constituent breadth, session VWAP breadth, 5-minute/15-minute EMA alignment, sector confirmation, and Buy/Sell VolmRatio leadership. The pill also shows directional Strength from 10% to 100% in 10% steps, based on aligned regime votes. A candidate reversal must persist for two refreshes before the pill changes to `NIFTY TURNING BULLISH FROM BEARISH` or `NIFTY TURNING BEARISH FROM BULLISH`; otherwise it shows `NIFTY BULLISH` or `NIFTY BEARISH`.
-- Shows the cumulative KiteTicker tick count beside the feed status.
-- Serves `/api/scan` for the page and `/api/health` for feed status.
-- Reads the approved phone-number allowlist from `numbers.txt`; only listed numbers can clear the dashboard access gate.
-- Serves `/api/access/login` and `/api/access/logout`; each approved number can hold one active session, and a second session is rejected until the first logs out.
-- Requires an active access session for `/api/scan`, so live scanner data is not returned to an unauthenticated page.
-- Starts market-data initialization in the background under Uvicorn, so the dashboard opens while history is still seeding.
-- Recomputes detailed rows and whole-universe Sector flow in a background cache; `/api/scan` only reads that cache, so browser polling does not rerun indicators or RFactor calculations.
-- Detects the next calendar session, clears prior-session live ticks, and reseeds fresh Kite history automatically without requiring a Render restart; the previous-session cache stays visible while this happens.
-- Outside market hours, the page labels loaded data as `Previous session` until the next session begins.
-- If the service restarts off-hours, the intraday view loads the persisted latest completed-session OHLC and volume cache, so ranking still reflects that session’s momentum without a redundant full seed.
-- A weekday is not treated as a new trading session until current-session candles or ticks actually exist, so weekends and exchange holidays continue showing the latest completed session.
-- When current-session data is absent, continuation, volume confirmation, and volume ratio all use the latest available trading session rather than the calendar date.
-- The pre-market seed starts at `07:30 IST` by default (`PREMARKET_SEED_TIME` can change it), so current history is normally ready before the `09:15 IST` open.
+## Leaderboard scrolling
 
-Full-universe mode is enabled by default. Set `FAST_MODE=true` to optionally watch all stocks with lightweight quote ticks while limiting detailed history/order-book work to `FAST_SYMBOL_LIMIT` stocks. Fast mode intentionally refreshes newly selected symbols as the rotation changes; keep `FAST_MODE=false` to avoid that behavior. `FAST_SELECTION_WAIT_SEC` controls how long startup waits for live quotes before selecting the Fast mode list, and `FAST_RESELECT_SEC` controls how often that list rotates (default: 300 seconds).
-`SCAN_COMPUTE_EVERY_SEC` controls the background cache refresh interval (default: 8 seconds).
+Top Gainers/Losers, Volume Ratio, and % Change show **seven stocks at once** in a fixed-height scrollable table. Scroll inside either column to see positions 8–15, up to **15 qualifying stocks per side**. The column header stays visible while scrolling, and the scroll position is preserved across live refreshes. Columns maintain equal visible height; when one side has fewer results, muted placeholder rows keep alignment (these are not market results). The original phone-number allowlist (`numbers.txt`) remains unchanged.
 
-The service keeps a best-effort local history cache when `SCANNER_DATA_DIR` is available, but the default Render filesystem is ephemeral. The same running instance will not repeat a completed seed on the same day; a true Render restart requires a fresh seed unless an external or persistent storage service is configured.
+## Getting started locally
 
-The initial historical seed is deliberately paced and can take a few minutes for the full universe. The lightweight defaults use 7 days of 5-minute candles and 120 days of daily candles. Until enough history is available, the page remains in demo mode. Kite access tokens normally expire daily, so provide a fresh token before starting the server.
+1. `python -m pip install -r requirements.txt`
+2. Add Kite credentials to environment: `KITE_API_KEY`, `KITE_ACCESS_TOKEN`.
+3. Create `numbers.txt` with approved 10-digit mobile numbers, one per line. Never commit or publicly serve this file.
+4. `python live_scanner_server.py` then open `http://localhost:8050`. Enter a number listed in `numbers.txt`. No SMS or OTP is required.
 
-For a single-process production deployment, use one worker because the process owns one KiteTicker connection:
+## Render deployment (original configuration restored)
 
-```bash
-python3 -m uvicorn app:app --host 0.0.0.0 --port 8050 --workers 1
-```
+- `render.yaml`, `app.py`, `requirements.txt` and `requirements-live.txt` are restored from your **original ZIP**. The original Render configuration uses `rootDir: outputs` and a Uvicorn command, with no mounted disk and no Twilio variables.
+- **Known issue preserved at your request:** the original Uvicorn start command may not work with the exported Flask WSGI application. The original `requirements.txt` also does not include Uvicorn; deployment needs separate verification before use. You may need your previous repository folder layout (`outputs/`) or to adjust the Render root directory.
+- The `numbers.txt` login and original one-active-session-per-number behavior require a **single application process**. No change to multi-instance scaling has been made.
+- The Kite access token must be refreshed as required by Zerodha. Render filesystem storage remains ephemeral in this original configuration. Keep `.runtime`, `.env`, and `numbers.txt` private.
 
-## Deploy on Render
+## API (authenticated)
 
-1. Put the files in this folder in a GitHub repository.
-2. In Render, create a new Web Service from that repository.
-3. Set the Root Directory to `outputs` if the folder is inside a larger repository.
-4. Use Build Command: `python3 -m pip install -r requirements.txt`.
-5. Use Start Command: `python3 -m uvicorn app:app --host 0.0.0.0 --port $PORT --workers 1`.
-6. Add `KITE_API_KEY` and `KITE_ACCESS_TOKEN` as secret environment variables.
-7. Deploy and open the Render URL. The health check is `/api/health`.
+- `POST /api/access/login` with `{"phone":"<registered_phone>","session_id":"<client_session_id>"}`
+- `POST /api/access/logout` with the same phone and session_id fields
+- Authenticated requests need `access_phone` and `access_session_id` query parameters, exactly like the original scanner:
+  - `GET /api/scan?type=intraday&universe=stocks&sector=ALL&limit=2000&access_phone=...&access_session_id=...`
+  - `GET /api/stock/RELIANCE/candles?access_phone=...&access_session_id=...`
+  - `GET /api/replay?symbol=RELIANCE&date=2026-10-07&access_phone=...&access_session_id=...`
+  - `GET /api/futures?access_phone=...&access_session_id=...` (optional NFO subscription)
+- `GET /api/health` (feed and seed status, no access tokens)
 
-`render.yaml` contains the same setup. Use an always-on instance for dependable market-hours streaming; sleeping instances can miss ticks. Kite access tokens usually expire daily, so update `KITE_ACCESS_TOKEN` in Render before the next session.
+## Known limits and precautions
 
-The active-phone lock is held in process memory. Keep one worker per service, as configured above; a server restart clears active locks and allows the approved number to log in again.
+- Test Kite API request quotas, exchange holidays, trading session short days, corporate actions, ticker disconnections and late/out-of-order ticks with a real market feed. Calendar weekdays alone don't identify exchange holidays. Tick-built OHLCV after reconnects may not reflect movements during a missing interval until recovery has completed.
+- A baseline with fewer than five previous sessions is treated as neutral. Freshness checks are per-stock; always check `fresh` and `asOf` before acting.
+- The original number-only login verifies allowlist membership, **not phone ownership**. It is unsuitable for high-security access without extra identity verification. Session locks live in process memory and reset on restart.
+- The historical replay stores only cached history; dates not in the cache return no observations, and forward labels are never used in replay score.
+- This software is a research dashboard, not an order-execution or autonomous trading bot.
 
-This is research context only. It is not an order-entry system or a trading signal.
+## Offline validation
+
+`python -m pytest -q tests` runs pure candle/volume/one-way/replay tests. Use `node --check` on extracted inline dashboard JS. Install requirements to run full Flask route integration tests and verify against Zerodha sandbox/live entitlements.
+
+### Paired leaderboard layout
+All three leaderboard views display seven rows at a time with an independent vertical scrollbar on each side. Each side contains at most 15 qualifying stocks; ranking and live-data source are unchanged. The fixed 7-row viewport keeps the paired columns aligned; fewer actual stocks appear with noninteractive muted placeholders when needed. On mobile the pair stacks, each retaining its own 7-row scroll viewport.

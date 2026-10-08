@@ -37,6 +37,7 @@ except Exception:  # pragma: no cover
 from kiteconnect import KiteConnect, KiteTicker
 
 from sector_definitions import ALL_SYMBOLS, SECTOR_DEFINITIONS
+from scanner_features import FiveMinuteBuilder, market_bucket, merge_finished, cumulative_slot_ratio, one_way_metrics, breakout_signals, replay_session
 
 
 # ----------------------------
@@ -77,9 +78,10 @@ except OSError:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 HISTORY_CACHE_PATH = DATA_DIR / "history-cache.pkl"
+HISTORY_WRITE_LOCK = threading.Lock()
 
 HISTORY_SLEEP_SEC = float(os.getenv("HISTORY_SLEEP_SEC", "0.35"))
-SEED_DAYS_5M = int(os.getenv("SEED_DAYS_5M", "7"))
+SEED_DAYS_5M = int(os.getenv("SEED_DAYS_5M", "45"))
 SEED_DAYS_DAILY = int(os.getenv("SEED_DAYS_DAILY", "120"))
 
 TICK_STALE_SEC = int(os.getenv("TICK_STALE_SEC", "20"))
@@ -101,6 +103,12 @@ MAX_SCAN_LIMIT = int(os.getenv("MAX_SCAN_LIMIT", "2000"))
 
 # Access session TTL (memory safety)
 ACCESS_TTL_SEC = int(os.getenv("ACCESS_TTL_SEC", "43200"))  # 12 hours
+ENABLE_FUTURES_OI = os.getenv("ENABLE_FUTURES_OI", "false").lower() == "true"
+PRIMARY_SECTOR = {symbol: group for group, symbols in reversed(list(SECTOR_DEFINITIONS.items()))
+                  if group != "NIFTY_50" for symbol in symbols}
+SECTOR_MEMBERSHIP = {symbol: {group for group, symbols in SECTOR_DEFINITIONS.items() if symbol in symbols}
+                     for symbol in ALL_SYMBOLS}
+INDUSTRY_GROUPS = {name: symbols for name, symbols in SECTOR_DEFINITIONS.items() if name != "NIFTY_50"}
 
 
 app = Flask(__name__)
@@ -116,6 +124,13 @@ INDEX_TOKEN_TO_SYMBOL: Dict[int, str] = {}
 TICK_STATE: Dict[int, Dict[str, Any]] = {}
 PRICE_HISTORY: Dict[int, deque] = {}
 HISTORY: Dict[int, Dict[str, pd.DataFrame]] = {}
+CANDLE_BUILDERS: Dict[int, FiveMinuteBuilder] = {}
+VOLUME_PROFILE_CACHE: Dict[int, tuple] = {}
+SCORE_HISTORY: Dict[str, deque] = {}
+FUTURES_TOKENS: Dict[int, str] = {}
+FUTURES_QUOTES: Dict[int, dict] = {}
+RECOVERY_STARTED = False
+RECOVERY_LOCK = threading.Lock()
 
 DATA_LOCK = threading.RLock()
 LAST_TICK_TS = 0.0
@@ -140,6 +155,7 @@ SEED_REQUESTED_DATE: Optional[date] = None        # date currently requested/run
 HISTORY_CACHE_LOADED = False
 
 DAILY_REFRESH_STARTED = False
+DAILY_REFRESH_REQUESTED_DATE: Optional[date] = None
 DAILY_REFRESH_START_LOCK = threading.Lock()
 
 # Cache computed scan rows to keep /api/scan cheap.
@@ -149,6 +165,7 @@ SCAN_CACHE: Dict[str, Dict[str, List[dict]]] = {
 }
 SECTOR_FLOW_CACHE: List[dict] = []
 SCAN_CACHE_UPDATED_AT = 0.0
+LAST_CACHE_SAVE_AT = 0.0
 SCAN_COMPUTE_STARTED = False
 SCAN_CACHE_LOCK = threading.RLock()
 SCAN_COMPUTE_START_LOCK = threading.Lock()
@@ -384,6 +401,11 @@ def _load_history_cache() -> bool:
 
 
 def _save_history_cache(seed_date: date) -> None:
+    with HISTORY_WRITE_LOCK:
+        _write_history_cache(seed_date)
+
+
+def _write_history_cache(seed_date: date) -> None:
     with DATA_LOCK:
         cached_history = {
             TOKEN_TO_SYMBOL[token]: histories
@@ -411,7 +433,7 @@ def _save_history_cache(seed_date: date) -> None:
 def load_instruments() -> None:
     global kite
     if not API_KEY or not ACCESS_TOKEN:
-        log.warning("Kite credentials missing; dashboard stays in demo/offline mode.")
+        log.warning("Kite credentials missing; dashboard remains offline (never simulated).")
         return
 
     kite = KiteConnect(api_key=API_KEY)
@@ -438,11 +460,41 @@ def load_instruments() -> None:
                 INDEX_TO_TOKEN[name] = int(row.instrument_token)
                 INDEX_TOKEN_TO_SYMBOL[int(row.instrument_token)] = name
 
+    if ENABLE_FUTURES_OI:
+        try:
+            nfo = pd.DataFrame(kite.instruments("NFO"))
+            if not nfo.empty and {"instrument_type", "name", "expiry", "instrument_token"}.issubset(nfo.columns):
+                f = nfo[(nfo["instrument_type"] == "FUT") & (nfo["name"].isin(ALL_SYMBOLS))].copy()
+                f["expiry"] = pd.to_datetime(f["expiry"]).dt.date
+                f = f[f["expiry"] >= datetime.now(IST).date()].sort_values("expiry").drop_duplicates("name")
+                with DATA_LOCK:
+                    FUTURES_TOKENS.clear()
+                    FUTURES_TOKENS.update({int(row.instrument_token): str(row.name) for row in f.itertuples()})
+                log.info("Optional FUTSTK OI tracking: %s near-expiry contracts", len(FUTURES_TOKENS))
+        except Exception:
+            log.exception("Optional futures OI instruments unavailable; cash scanner continues")
+
     missing = sorted(set(ALL_SYMBOLS) - set(SYMBOL_TO_TOKEN))
     log.info("Loaded %s/%s NSE symbols", len(SYMBOL_TO_TOKEN), len(ALL_SYMBOLS))
     log.info("Loaded official index quotes: %s", ", ".join(sorted(INDEX_TO_TOKEN)) or "none")
     if missing:
         log.warning("Symbols missing in Kite NSE instruments: %s", ", ".join(missing))
+
+
+def _append_closed(token: int, candle: dict) -> None:
+    if not candle or candle.get("volume", 0) < 0:
+        return
+    histories = HISTORY.setdefault(token, {})
+    histories["intraday"] = merge_finished(histories.get("intraday"), [candle])
+
+
+def _flush_completed_candles(now: datetime) -> None:
+    with DATA_LOCK:
+        for token, builder in CANDLE_BUILDERS.items():
+            if builder.start is not None and builder.candle and now >= builder.start + timedelta(minutes=5):
+                _append_closed(token, builder.partial())
+                builder.candle = None
+                builder.start = None
 
 
 def _update_tick(tick: dict) -> None:
@@ -451,32 +503,60 @@ def _update_tick(tick: dict) -> None:
     if token is None or ltp is None or ltp <= 0:
         return
     token = int(token)
-
-    ohlc = tick.get("ohlc") or {}
-    flow_delta = _order_book_delta(tick.get("depth") or {})
-    volume = _as_float(tick.get("volume_traded"))
-
-    if volume is None:
-        volume = _as_float((TICK_STATE.get(token) or {}).get("volume")) or 0.0
-
+    if token in FUTURES_TOKENS:
+        oi = _as_float(tick.get("oi"))
+        if oi is not None:
+            original = FUTURES_QUOTES.get(token)
+            if original is None or original.get("day") != datetime.now(IST).date():
+                FUTURES_QUOTES[token] = {"day": datetime.now(IST).date(), "base_oi": oi,
+                                         "base_price": ltp, "oi": oi, "ltp": ltp, "ts": time.time()}
+            else:
+                original.update({"oi": oi, "ltp": ltp, "ts": time.time()})
+        return
+    if token not in TOKEN_TO_SYMBOL and token not in INDEX_TOKEN_TO_SYMBOL:
+        return
+    timestamp = tick.get("exchange_timestamp") or tick.get("last_trade_time")
+    if isinstance(timestamp, datetime):
+        timestamp = timestamp.replace(tzinfo=IST) if timestamp.tzinfo is None else timestamp.astimezone(IST)
+    else:
+        timestamp = datetime.now(IST)
     ts = time.time()
-    TICK_STATE[token] = {"ltp": ltp, "volume": volume, "ohlc": ohlc, "flow_delta": flow_delta, "ts": ts}
-
-    history = PRICE_HISTORY.setdefault(token, deque(maxlen=3600))
-    history.append((ts, ltp, volume, flow_delta))
+    ohlc = tick.get("ohlc") or {}
+    depth_imbalance = _order_book_delta(tick.get("depth") or {})
+    previous = TICK_STATE.get(token) or {}
+    volume = _as_float(tick.get("volume_traded"))
+    if volume is None:
+        volume = _as_float(previous.get("volume")) or 0.
+    if previous.get("day") != timestamp.date():
+        CANDLE_BUILDERS.pop(token, None)
+    TICK_STATE[token] = {"ltp": ltp, "volume": volume, "ohlc": ohlc,
+                         "depth_imbalance": depth_imbalance, "ts": ts, "day": timestamp.date()}
+    PRICE_HISTORY.setdefault(token, deque(maxlen=3600)).append((ts, ltp, volume, depth_imbalance))
+    if token in TOKEN_TO_SYMBOL and market_bucket(timestamp) is not None:
+        builder = CANDLE_BUILDERS.setdefault(token, FiveMinuteBuilder())
+        baseline = 0.
+        if builder.previous_total is None:
+            frame = HISTORY.get(token, {}).get("intraday")
+            if frame is not None and not frame.empty:
+                finished = frame[frame["date"].dt.date == timestamp.date()]
+                baseline = float(finished["volume"].sum()) if not finished.empty else 0.
+        closed = builder.ingest(timestamp, ltp, volume, baseline)
+        if closed:
+            _append_closed(token, closed)
 
 
 def _set_ticker_modes(selected_symbols: set[str]) -> None:
     with DATA_LOCK:
         ticker_ws = TICKER_WS
-        all_tokens = sorted(set(TOKEN_TO_SYMBOL) | set(INDEX_TOKEN_TO_SYMBOL))
+        all_tokens = sorted(set(TOKEN_TO_SYMBOL) | set(INDEX_TOKEN_TO_SYMBOL) | set(FUTURES_TOKENS))
         selected_tokens = [SYMBOL_TO_TOKEN[symbol] for symbol in selected_symbols if symbol in SYMBOL_TO_TOKEN]
     if not ticker_ws:
         return
     try:
         ticker_ws.set_mode(ticker_ws.MODE_QUOTE, all_tokens)
-        if selected_tokens:
-            ticker_ws.set_mode(ticker_ws.MODE_FULL, selected_tokens)
+        full_tokens = sorted(set(selected_tokens) | set(FUTURES_TOKENS))
+        if full_tokens:
+            ticker_ws.set_mode(ticker_ws.MODE_FULL, full_tokens)
     except Exception:
         log.exception("Unable to update Fast mode ticker subscriptions")
 
@@ -487,7 +567,7 @@ def _start_ticker() -> None:
         return
 
     TICKER_STARTED = True
-    tokens = sorted(set(TOKEN_TO_SYMBOL) | set(INDEX_TOKEN_TO_SYMBOL))
+    tokens = sorted(set(TOKEN_TO_SYMBOL) | set(INDEX_TOKEN_TO_SYMBOL) | set(FUTURES_TOKENS))
 
     def run() -> None:
         global TICKER_CONNECTED, TICKER_WS, LAST_TICK_TS, TOTAL_TICKS
@@ -496,7 +576,7 @@ def _start_ticker() -> None:
             closed = threading.Event()
 
             try:
-                ticker = KiteTicker(API_KEY, ACCESS_TOKEN)
+                ticker = KiteTicker(API_KEY, ACCESS_TOKEN, reconnect=False)
 
                 def on_connect(ws, _response):
                     global TICKER_CONNECTED, TICKER_WS
@@ -507,10 +587,12 @@ def _start_ticker() -> None:
                     # FULL mode only for selected detail symbols (may be empty).
                     with DATA_LOCK:
                         selected_tokens = [SYMBOL_TO_TOKEN[s] for s in DETAIL_SYMBOLS if s in SYMBOL_TO_TOKEN]
-                    if selected_tokens:
-                        ws.set_mode(ws.MODE_FULL, selected_tokens)
+                    full_tokens = sorted(set(selected_tokens) | set(FUTURES_TOKENS))
+                    if full_tokens:
+                        ws.set_mode(ws.MODE_FULL, full_tokens)
 
                     TICKER_CONNECTED = True
+                    _start_gap_recovery()
                     log.info(
                         "KiteTicker connected: %s quote tokens, %s full-depth tokens",
                         len(tokens),
@@ -637,8 +719,12 @@ def _seed_symbol(symbol: str, token: int) -> None:
             oi=False,
         )
 
+        completed = _normalize_history(five)
+        bucket = market_bucket(datetime.now(IST))
+        if bucket is not None and not completed.empty:
+            completed = completed[completed["date"] < bucket].reset_index(drop=True)
         with DATA_LOCK:
-            HISTORY[token] = {"intraday": _normalize_history(five), "regular": _normalize_history(daily)}
+            HISTORY[token] = {"intraday": completed, "regular": _normalize_history(daily)}
     finally:
         time.sleep(HISTORY_SLEEP_SEC)
 
@@ -716,6 +802,10 @@ def _prepare_for_new_market_day(today: date) -> None:
     with DATA_LOCK:
         PRICE_HISTORY.clear()
         TICK_STATE.clear()
+        CANDLE_BUILDERS.clear()
+        VOLUME_PROFILE_CACHE.clear()
+        SCORE_HISTORY.clear()
+        FUTURES_QUOTES.clear()
         LAST_TICK_TS = 0.0
         TOTAL_TICKS = 0
     log.info("Preparing fresh market session for %s", today.isoformat())
@@ -729,6 +819,7 @@ def _start_daily_refresh() -> None:
         DAILY_REFRESH_STARTED = True
 
     def run() -> None:
+        global DAILY_REFRESH_REQUESTED_DATE
         while True:
             now = datetime.now(IST)
             seeded_date = HISTORY_SEED_DATE
@@ -737,11 +828,13 @@ def _start_daily_refresh() -> None:
                 and now.time() >= PREMARKET_SEED_TIME
                 and seeded_date is not None
                 and seeded_date < now.date()
+                and DAILY_REFRESH_REQUESTED_DATE != now.date()
                 and not SEED_IN_PROGRESS
             ):
+                DAILY_REFRESH_REQUESTED_DATE = now.date()
                 _prepare_for_new_market_day(now.date())
                 try:
-                    _start_history_seed(force=True)
+                    _start_incremental_refresh()
                 except Exception:
                     log.exception("New market-day history seed failed")
             time.sleep(30)
@@ -790,15 +883,22 @@ def _start_history_seed(force: bool = False) -> None:
     SEED_PROGRESS["total"] = len(tokens)
 
     def run() -> None:
-        global HISTORY_CACHE_LOADED, SEED_IN_PROGRESS, HISTORY_SEED_DATE
+        global HISTORY_CACHE_LOADED, SEED_IN_PROGRESS, HISTORY_SEED_DATE, SEED_REQUESTED_DATE
         seed_date = today
         try:
             for token, symbol in tokens:
                 try:
-                    _seed_symbol(symbol, token)
+                    for attempt in range(3):
+                        try:
+                            _seed_symbol(symbol, token)
+                            break
+                        except Exception:
+                            if attempt == 2:
+                                raise
+                            time.sleep(2 * (attempt + 1))
                 except Exception:
                     SEED_PROGRESS["errors"] += 1
-                    log.exception("History seed failed for %s", symbol)
+                    log.exception("History seed failed for %s after retries", symbol)
                 finally:
                     SEED_PROGRESS["done"] += 1
         finally:
@@ -811,10 +911,88 @@ def _start_history_seed(force: bool = False) -> None:
                 HISTORY_CACHE_LOADED = True
             else:
                 HISTORY_CACHE_LOADED = False
+                SEED_REQUESTED_DATE = None
 
             _start_fast_rotation()
+            if success:
+                _start_gap_recovery()
 
     threading.Thread(target=run, name="history-seed", daemon=True).start()
+
+
+def _recover_history(symbol: str, token: int, now: datetime, daily: bool = False) -> None:
+    if kite is None:
+        return
+    with DATA_LOCK:
+        existing = HISTORY.get(token, {})
+        older = existing.get("intraday")
+        daily_frame = existing.get("regular")
+    # One request per stale symbol, not a full multi-week seed per market day.
+    end_of_completed = now.replace(second=0, microsecond=0)
+    end_of_completed -= timedelta(minutes=end_of_completed.minute % 5)
+    if older is not None and not older.empty:
+        start_time = older.iloc[-1]["date"] - timedelta(minutes=5)
+    else:
+        start_time = now - timedelta(days=SEED_DAYS_5M)
+    if (now - start_time).days > 59:
+        start_time = now - timedelta(days=59)
+    if start_time < end_of_completed:
+        rows = kite.historical_data(token, start_time, end_of_completed, "5minute", continuous=False, oi=False)
+        additional = _normalize_history(rows)
+        if not additional.empty:
+            additional = additional[additional["date"] + pd.Timedelta(minutes=5) <= end_of_completed]
+            with DATA_LOCK:
+                frame = HISTORY.setdefault(token, {}).get("intraday")
+                HISTORY[token]["intraday"] = merge_finished(frame, additional.to_dict("records"))
+    time.sleep(HISTORY_SLEEP_SEC)
+    if daily:
+        beginning = daily_frame.iloc[-1]["date"] - timedelta(days=2) if daily_frame is not None and not daily_frame.empty else now - timedelta(days=SEED_DAYS_DAILY)
+        rows = kite.historical_data(token, beginning, now, "day", continuous=False, oi=False)
+        additional = _normalize_history(rows)
+        if not additional.empty:
+            with DATA_LOCK:
+                history = HISTORY.setdefault(token, {})
+                history["regular"] = merge_finished(history.get("regular"), additional.to_dict("records"), max_rows=180)
+        time.sleep(HISTORY_SLEEP_SEC)
+
+
+def _start_gap_recovery(daily: bool = False) -> None:
+    global RECOVERY_STARTED
+    with RECOVERY_LOCK:
+        if RECOVERY_STARTED or SEED_IN_PROGRESS or kite is None:
+            return
+        RECOVERY_STARTED = True
+    def run() -> None:
+        global RECOVERY_STARTED, HISTORY_SEED_DATE, HISTORY_CACHE_LOADED, DAILY_REFRESH_REQUESTED_DATE
+        now = datetime.now(IST)
+        errors = 0
+        try:
+            for symbol, token in list(SYMBOL_TO_TOKEN.items()):
+                try:
+                    with DATA_LOCK:
+                        data = HISTORY.get(token, {}).get("intraday")
+                    if data is None or data.empty:
+                        errors += 1
+                        continue  # initial seed owns these symbols; do not mark recovery complete
+                    if daily or (now - data.iloc[-1]["date"]).total_seconds() >= 600:
+                        _recover_history(symbol, token, datetime.now(IST), daily)
+                except Exception:
+                    errors += 1
+                    log.exception("Gap-recovery failed for %s", symbol)
+            if errors == 0:
+                HISTORY_SEED_DATE = now.date()
+                HISTORY_CACHE_LOADED = True
+                _save_history_cache(now.date())
+            else:
+                log.warning("Gap recovery finished with %s errors; will retry", errors)
+                DAILY_REFRESH_REQUESTED_DATE = None
+        finally:
+            RECOVERY_STARTED = False
+    threading.Thread(target=run, name="gap-recovery", daemon=True).start()
+
+
+def _start_incremental_refresh() -> None:
+    _start_gap_recovery(daily=True)
 
 
 # ----------------------------
@@ -872,7 +1050,7 @@ def _history_state(token: int, timeframe: str) -> Optional[tuple[pd.DataFrame, f
         return None
 
     last = frame.iloc[-1]
-    tick_ltp = _as_float(tick.get("ltp"))
+    tick_ltp = _as_float(tick.get("ltp")) if tick.get("day") == datetime.now(IST).date() else None
     ltp = tick_ltp or _as_float(last.get("close"))
     volume = _as_float(tick.get("volume")) or _as_float(last.get("volume")) or 0.0
     ohlc = tick.get("ohlc") if isinstance(tick.get("ohlc"), dict) else {}
@@ -993,82 +1171,58 @@ def _daily_atr_percent(token: int) -> float:
     return value if math.isfinite(value) and value > 0 else 1.0
 
 
-def _intraday_volume_ratio(frame: pd.DataFrame, volume: float, now: datetime) -> float:
-    """Compare cumulative volume with the same 5-minute slot on prior sessions."""
-    if frame.empty or "date" not in frame or "volume" not in frame:
+def _intraday_volume_ratio(token: int, frame: pd.DataFrame, volume: float, now: datetime) -> float:
+    """Cache slot cumulative-volume medians; don't group 45d of candles every 8s."""
+    if frame.empty:
         return 1.0
-
-    intraday = frame[frame["volume"] > 0].copy()
-    if intraday.empty:
+    day = now.date()
+    historical = frame[frame["date"].dt.date < day]
+    if historical.empty:
         return 1.0
-
-    sessions = {day: group.sort_values("date") for day, group in intraday.groupby(intraday["date"].dt.date)}
-    if not sessions:
-        return 1.0
-
-    live_session = market_is_open(now) and _has_current_session_data(now)
-    if live_session:
-        reference_date = now.date()
-        slot = int(max(0, (now - now.replace(hour=9, minute=15, second=0, microsecond=0)).total_seconds()) // 300) + 1
-        slot = max(1, min(75, slot))
+    latest_day = historical.iloc[-1]["date"].date()
+    key = (day, latest_day, len(historical))
+    with DATA_LOCK:
+        stored = VOLUME_PROFILE_CACHE.get(token)
+    if stored is None or stored[0] != key:
+        sessions = []
+        for _, series in list(historical.groupby(historical["date"].dt.date))[-30:]:
+            series = series.sort_values("date")
+            slot_numbers = (series["date"].dt.hour * 60 + series["date"].dt.minute - 555) // 5
+            slot_volume = {int(slot): float(vol) for slot, vol in zip(slot_numbers, series["volume"]) if 0 <= slot < 75}
+            cumulative = 0.0
+            session_profile = {}
+            for slot in range(75):
+                if slot in slot_volume:
+                    cumulative += max(0.0, slot_volume[slot])
+                    session_profile[slot] = cumulative
+            sessions.append(session_profile)
+        medians = {}
+        for slot in range(75):
+            values = [session[slot] for session in sessions if slot in session and session[slot] > 0]
+            if len(values) >= 5:
+                medians[slot] = float(pd.Series(values).median())
+        with DATA_LOCK:
+            VOLUME_PROFILE_CACHE[token] = (key, medians)
     else:
-        reference_date = max(sessions)
-        slot = len(sessions[reference_date])
-
-    baselines = []
-    for day in sorted(day for day in sessions if day < reference_date)[-40:]:
-        cumulative = sessions[day]["volume"].cumsum()
-        if cumulative.empty:
-            continue
-        index = min(slot, len(cumulative)) - 1
-        if index >= 0 and float(cumulative.iloc[index]) > 0:
-            baselines.append(float(cumulative.iloc[index]))
-
-    if len(baselines) < 5:
-        return 1.0
-    expected = float(pd.Series(baselines).median())
-    return max(0.0, float(volume) / (expected + 1e-9)) if expected > 0 else 1.0
+        medians = stored[1]
+    slot = max(0, min(74, int((now.hour * 60 + now.minute - 555) // 5)))
+    baseline = medians.get(slot)
+    return round(max(0., volume / baseline), 2) if baseline else 1.0
 
 
 def _live_candles(token: int, now: datetime) -> list[dict]:
-    """Build rolling 5-minute candles from recent ticks."""
-    market_open = now.replace(hour=9, minute=15, second=0, microsecond=0)
-    cutoff = max(market_open.timestamp(), now.timestamp() - 20 * 60)
-
     with DATA_LOCK:
-        ticks = list(PRICE_HISTORY.get(token, ()))
-
-    buckets: dict[int, dict] = {}
-    for tick in ticks:
-        timestamp, price, volume = tick[:3]
-        flow_delta = tick[3] if len(tick) > 3 else None
-        if timestamp < cutoff or timestamp < market_open.timestamp() or price <= 0:
-            continue
-
-        bucket = int((timestamp - market_open.timestamp()) // 300)
-        candle = buckets.setdefault(
-            bucket,
-            {"open": price, "high": price, "low": price, "close": price, "last_volume": volume, "delta_sum": 0.0, "delta_count": 0},
-        )
-        candle["high"] = max(candle["high"], price)
-        candle["low"] = min(candle["low"], price)
-        candle["close"] = price
-        candle["last_volume"] = volume
-
-        if flow_delta is not None:
-            candle["delta_sum"] += flow_delta
-            candle["delta_count"] += 1
-
-    candles = []
-    previous_volume = None
-    for bucket in sorted(buckets):
-        candle = buckets[bucket]
-        last_volume = float(candle.get("last_volume") or 0.0)
-        candle_volume = max(0.0, last_volume - (previous_volume or 0.0)) if previous_volume is not None else 0.0
-        flow = candle["delta_sum"] / candle["delta_count"] if candle["delta_count"] else None
-        candles.append({**candle, "volume": candle_volume, "flow_delta": flow})
-        previous_volume = last_volume
-    return candles
+        frame = HISTORY.get(token, {}).get("intraday")
+        builder = CANDLE_BUILDERS.get(token)
+        partial = builder.partial() if builder else None
+    finished = []
+    if frame is not None and not frame.empty:
+        today = frame[frame["date"].dt.date == now.date()].tail(4)
+        finished = [{"open": float(r.open), "high": float(r.high), "low": float(r.low),
+                     "close": float(r.close), "volume": float(r.volume)} for r in today.itertuples()]
+    if partial and partial["date"].date() == now.date():
+        finished.append({key: partial[key] for key in ("open", "high", "low", "close", "volume")})
+    return finished[-4:]
 
 
 def _session_trend_quality(frame: pd.DataFrame, ltp: float, change: float, now: datetime, live_candles: Optional[list[dict]] = None) -> float:
@@ -1209,37 +1363,29 @@ def _rfactor(token: int, timeframe: str, ltp: float, volume: float, high: float,
     return round(3.5 * math.log1p(max(raw, 0.0)), 2)
 
 
-def _advanced_score(row: dict, relative_strength: float = 0.5) -> float:
-    """Build a bounded, direction-aware score from normalized components."""
+def _advanced_score_components(row: dict, relative_strength: float = 0.5) -> dict:
+    """Actual weighted score contributions (point sum equals reported score)."""
     direction = 1.0 if float(row.get("direction") or 1.0) > 0 else -1.0
     change = abs(float(row.get("change") or 0.0))
     atr_percent = max(float(row.get("atrPercent") or 1.0), 0.25)
-    return_component = _clip(change / atr_percent / 2.0)
+    r = _clip(change / atr_percent / 2.0)
+    ratio = max(float(row.get("timeVolumeRatio") or 1.0), 0.05)
+    vr = _clip(0.5 + 0.20 * math.log(ratio, 2.0))
+    v = 0.55 * vr + 0.45 * _clip(float(row.get("volumeConfirm") or 0.5))
+    recent = _clip(0.5 + 0.25 * direction * float(row.get("recent") or 0))
+    cont = 0.60 * _clip(float(row.get("trendQuality") or 0.5)) + 0.40 * recent
+    adx = _clip((float(row.get("adx") or 10.0) - 10.0) / 30.0)
+    trend = 0.60 * adx + 0.40 * _clip(0.5 + direction * float(row.get("ema") or 0.0) / 5.0)
+    flow_delta = row.get("depthImbalance")
+    flow = 0.5 if flow_delta is None else _clip(0.5 + 0.40 * direction * float(flow_delta))
+    rf = _clip(float(row.get("rfactor") or 0) / 4.)
+    return {"price": 25 * r, "volume": 20 * v, "continuation": 15 * cont,
+            "trend": 15 * trend, "relative": 10 * _clip(relative_strength),
+            "restingDepth": 10 * flow, "rfactor": 5 * rf}
 
-    time_volume_ratio = max(float(row.get("timeVolumeRatio") or 1.0), 0.05)
-    slot_volume_component = _clip(0.5 + 0.20 * math.log(time_volume_ratio, 2.0))
-    volume_component = 0.55 * slot_volume_component + 0.45 * _clip(float(row.get("volumeConfirm") or 0.5))
 
-    recent_alignment = direction * float(row.get("recent") or 0.0)
-    recent_component = _clip(0.5 + 0.25 * recent_alignment)
-    continuation_component = 0.60 * _clip(float(row.get("trendQuality") or 0.5)) + 0.40 * recent_component
-    adx_component = _clip((float(row.get("adx") or 10.0) - 10.0) / 30.0)
-    ema_alignment = 0.5 + direction * float(row.get("ema") or 0.0) / 5.0
-    trend_component = 0.60 * adx_component + 0.40 * _clip(ema_alignment)
-
-    flow_delta = row.get("buySellDelta")
-    flow_component = 0.5 if flow_delta is None else _clip(0.5 + 0.40 * direction * float(flow_delta))
-    rfactor_component = _clip(float(row.get("rfactor") or 0.0) / 4.0)
-
-    return round(100.0 * (
-        0.25 * return_component
-        + 0.20 * volume_component
-        + 0.15 * continuation_component
-        + 0.15 * trend_component
-        + 0.10 * _clip(relative_strength)
-        + 0.10 * flow_component
-        + 0.05 * rfactor_component
-    ), 4)
+def _advanced_score(row: dict, relative_strength: float = 0.5) -> float:
+    return round(sum(_advanced_score_components(row, relative_strength).values()), 4)
 
 
 def _apply_advanced_scores(rows: List[dict]) -> List[dict]:
@@ -1265,6 +1411,7 @@ def _apply_advanced_scores(rows: List[dict]) -> List[dict]:
         row["sectorRelative"] = round(sector_edge, 2)
         row["marketRelative"] = round(market_edge, 2)
         row["score"] = _advanced_score(row, relative_strength)
+        row["scoreDrivers"] = {key: round(value, 2) for key, value in _advanced_score_components(row, relative_strength).items()}
     return rows
 
 
@@ -1278,6 +1425,12 @@ def _build_row(symbol: str, sector: str, timeframe: str) -> Optional[dict]:
         return None
 
     frame, ltp, volume, ohlc = hs
+    if timeframe == "intraday":
+        with DATA_LOCK:
+            builder = CANDLE_BUILDERS.get(token)
+            partial = builder.partial() if builder else None
+        if partial and partial["date"].date() == datetime.now(IST).date():
+            frame = merge_finished(frame, [partial])
     open_price = _as_float(ohlc.get("open")) or _as_float(frame.iloc[-1]["open"])
     day_high = _as_float(ohlc.get("high")) or _as_float(frame.iloc[-1]["high"])
     day_low = _as_float(ohlc.get("low")) or _as_float(frame.iloc[-1]["low"])
@@ -1291,7 +1444,11 @@ def _build_row(symbol: str, sector: str, timeframe: str) -> Optional[dict]:
         change = (ltp - open_price) / (open_price + 1e-9) * 100.0
 
     closes = pd.to_numeric(frame["close"], errors="coerce").dropna()
-    close_values = closes.tolist() + [ltp]
+    close_values = closes.tolist()
+    if timeframe == "intraday" and not frame.empty and market_bucket(datetime.now(IST)) == frame.iloc[-1]["date"]:
+        close_values[-1] = ltp
+    else:
+        close_values.append(ltp)
     indicator_closes = pd.Series(close_values, dtype="float64")
 
     indicator_frame = frame[["high", "low", "close"]].copy()
@@ -1309,9 +1466,11 @@ def _build_row(symbol: str, sector: str, timeframe: str) -> Optional[dict]:
 
     now = datetime.now(IST)
     trend_features = _trend_features(frame, ltp, now)
-    ratio = _volume_ratio(token, timeframe, volume, now)
+    daily_pace_ratio = _volume_ratio(token, timeframe, volume, now)
     atr_percent = _daily_atr_percent(token)
-    time_volume_ratio = _intraday_volume_ratio(frame, volume, now) if timeframe == "intraday" else ratio
+    time_volume_ratio = _intraday_volume_ratio(token, frame, volume, now) if timeframe == "intraday" else daily_pace_ratio
+    ratio = time_volume_ratio if timeframe == "intraday" else daily_pace_ratio
+    baseline_ready = (timeframe != "intraday" or bool(VOLUME_PROFILE_CACHE.get(token, (None, {}))[1]))
     ema_gap = (ltp - ema) / ema * 100.0
 
     live_candles = _live_candles(token, now) if timeframe == "intraday" else []
@@ -1327,7 +1486,8 @@ def _build_row(symbol: str, sector: str, timeframe: str) -> Optional[dict]:
     volume_quality = _volume_confirmation(frame, expected_direction, now, live_candles) if timeframe == "intraday" else 1.0
 
     flow_values = [c.get("flow_delta") for c in live_candles[-3:] if c.get("flow_delta") is not None]
-    buy_sell_delta = sum(flow_values) / len(flow_values) if flow_values else None
+    latest_depth = (TICK_STATE.get(token) or {}).get("depth_imbalance")
+    buy_sell_delta = latest_depth  # resting-depth imbalance, NOT executed buy/sell volume
 
     rfactor = _rfactor(token, timeframe, ltp, volume, day_high, day_low, change)
     continuation_quality = max(0.05, min(1.0, trend_quality * volume_quality))
@@ -1350,10 +1510,13 @@ def _build_row(symbol: str, sector: str, timeframe: str) -> Optional[dict]:
         "trendQuality": round(trend_quality, 2),
         "volumeConfirm": round(volume_quality, 2),
         "continuation": round(continuation_quality, 2),
-        "buySellDelta": round(buy_sell_delta, 2) if buy_sell_delta is not None else None,
+        "depthImbalance": round(buy_sell_delta, 3) if buy_sell_delta is not None else None,
+        "buySellDelta": None,  # deprecated: do not mislabel resting depth as executed flow
         "volume": round((ratio - 1.0) * 100.0, 2),
         "ratio": round(ratio, 2),
         "timeVolumeRatio": round(time_volume_ratio, 2),
+        "volumeBaselineReady": baseline_ready,
+        "dailyPaceRatio": round(daily_pace_ratio, 2),
         "vwapGap": round(trend_features["vwapGap"], 2) if trend_features["vwapGap"] is not None else None,
         "emaTrend5": round(trend_features["emaTrend5"], 3) if trend_features["emaTrend5"] is not None else None,
         "emaTrend15": round(trend_features["emaTrend15"], 3) if trend_features["emaTrend15"] is not None else None,
@@ -1369,6 +1532,21 @@ def _build_row(symbol: str, sector: str, timeframe: str) -> Optional[dict]:
         "isIndex": False,
     }
     row["score"] = _advanced_score(row)
+    row["asOf"] = datetime.fromtimestamp((TICK_STATE.get(token) or {}).get("ts") or 0, IST).isoformat() if (TICK_STATE.get(token) or {}).get("ts") else None
+    row["fresh"] = bool(row["asOf"] and time.time() - TICK_STATE[token]["ts"] <= TICK_STALE_SEC)
+    if timeframe == "intraday":
+        today = frame[frame["date"].dt.date == now.date()]
+        row.update(one_way_metrics(today, row["direction"]))
+        prior_daily = HISTORY.get(token, {}).get("regular")
+        prior = prior_daily[prior_daily["date"].dt.date < now.date()] if prior_daily is not None and not prior_daily.empty else None
+        previous_day = prior.iloc[-1].to_dict() if prior is not None and not prior.empty else None
+        # Only closed candles establish breakout reference levels.
+        closed = today.iloc[:-1] if not today.empty and market_bucket(now) and today.iloc[-1]["date"] == market_bucket(now) else today
+        row["alerts"] = breakout_signals(closed, previous_day, ltp, time_volume_ratio)
+        row["momentum5"] = round((ltp / float(frame.iloc[-2]["close"]) - 1) * 100, 2) if len(frame) > 1 else None
+        row["momentum15"] = round((ltp / float(frame.iloc[-4]["close"]) - 1) * 100, 2) if len(frame) > 3 else None
+        row["momentum30"] = round((ltp / float(frame.iloc[-7]["close"]) - 1) * 100, 2) if len(frame) > 6 else None
+
     return row
 
 
@@ -1466,16 +1644,11 @@ def build_rows(timeframe: str, universe: str, sector: str) -> List[dict]:
                 rows.append(aggregate)
         return _rank(_apply_advanced_scores(rows))
 
-    membership: Dict[str, str] = {}
-    for group, symbols in SECTOR_DEFINITIONS.items():
-        for symbol in symbols:
-            membership.setdefault(symbol, group)
-
-    symbols = list(dict.fromkeys(SECTOR_DEFINITIONS.get(sector, []))) if sector != "ALL" else list(membership)
+    symbols = list(dict.fromkeys(SECTOR_DEFINITIONS.get(sector, []))) if sector != "ALL" else list(ALL_SYMBOLS)
     if FAST_MODE:
-        symbols = [s for s in symbols if s in detail_symbols]
+        symbols = [symbol for symbol in symbols if symbol in detail_symbols]
 
-    rows = [_build_row(symbol, membership.get(symbol, sector), timeframe) for symbol in symbols]
+    rows = [_build_row(symbol, PRIMARY_SECTOR.get(symbol, "OTHER"), timeframe) for symbol in symbols]
     return _rank(_apply_advanced_scores([row for row in rows if row]))
 
 
@@ -1484,7 +1657,7 @@ def _rows_from_cache(timeframe: str, universe: str, sector: str) -> List[dict]:
     with SCAN_CACHE_LOCK:
         rows = [dict(row) for row in SCAN_CACHE.get(timeframe, {}).get(universe, [])]
     if universe == "stocks" and sector != "ALL":
-        rows = [row for row in rows if row.get("sector") == sector]
+        rows = [row for row in rows if row.get("symbol") in SECTOR_DEFINITIONS.get(sector, [])]
     rows = _directional_rank(rows, "_scan_score")
     for row in rows:
         row.pop("_scan_score", None)
@@ -1492,93 +1665,56 @@ def _rows_from_cache(timeframe: str, universe: str, sector: str) -> List[dict]:
 
 
 def build_sector_flow(rows: Optional[List[dict]] = None) -> List[dict]:
-    membership: Dict[str, str] = {}
-    for group, symbols in SECTOR_DEFINITIONS.items():
-        for symbol in symbols:
-            membership.setdefault(symbol, group)
-
     score_by_symbol = {str(row.get("symbol")): row for row in (rows or []) if row.get("symbol")}
-    grouped: Dict[str, dict] = {}
     now = datetime.now(IST)
     with DATA_LOCK:
         ticks = {symbol: dict(TICK_STATE.get(token) or {}) for symbol, token in SYMBOL_TO_TOKEN.items()}
-
-    for symbol, tick in ticks.items():
-        sector = membership.get(symbol)
-        if not sector:
+    results = []
+    for sector, symbols in INDUSTRY_GROUPS.items():
+        valid = []
+        for symbol in dict.fromkeys(symbols):
+            tick = ticks.get(symbol) or {}
+            ltp = _as_float(tick.get("ltp"))
+            open_price = _as_float((tick.get("ohlc") or {}).get("open"))
+            if not (ltp and open_price and tick.get("day") == now.date()):
+                continue
+            change = (ltp / open_price - 1) * 100
+            row = score_by_symbol.get(symbol) or {}
+            valid.append((symbol, change, row))
+        if not valid:
             continue
-        ltp = _as_float(tick.get("ltp"))
-        ohlc = tick.get("ohlc") if isinstance(tick.get("ohlc"), dict) else {}
-        open_price = _as_float(ohlc.get("open"))
-        if not ltp or not open_price:
-            continue
-        change = (ltp - open_price) / open_price * 100.0
-        token = SYMBOL_TO_TOKEN.get(symbol)
-        volume_ratio = None
-        if token:
-            with DATA_LOCK:
-                daily = HISTORY.get(token, {}).get("regular")
-            if daily is not None and not daily.empty:
-                volume_ratio = _volume_ratio(token, "intraday", _as_float(tick.get("volume")) or 0.0, now)
-
-        group = grouped.setdefault(
-            sector,
-            {
-                "name": sector,
-                "sum": 0.0,
-                "volume_ratio_sum": 0.0,
-                "volume_ratio_count": 0,
-                "dir_score_sum": 0.0,
-                "score_count": 0,
-                "count": 0,
-                "up": 0,
-                "down": 0,
-            },
-        )
-        group["sum"] += change
-        if volume_ratio is not None:
-            group["volume_ratio_sum"] += volume_ratio
-            group["volume_ratio_count"] += 1
-        score_row = score_by_symbol.get(symbol)
-        if score_row is not None:
-            direction = 1.0 if float(score_row.get("direction") or 1.0) > 0 else -1.0
-            group["dir_score_sum"] += direction * float(score_row.get("score") or 0.0)
-            group["score_count"] += 1
-        group["count"] += 1
-        group["up"] += int(change >= 0)
-        group["down"] += int(change < 0)
-
-    def mean(item: dict) -> float:
-        return item["sum"] / max(item["count"], 1)
-
-    return [
-        {
-            "name": group["name"],
-            "mean": round(mean(group), 2),
-            "volume_ratio_mean": round(
-                group["volume_ratio_sum"] / group["volume_ratio_count"], 2
-            )
-            if group["volume_ratio_count"]
-            else None,
-            "dirRScore": round(group["dir_score_sum"] / group["score_count"], 2)
-            if group["score_count"]
-            else None,
-            "count": group["count"],
-            "up": group["up"],
-            "down": group["down"],
-        }
-        for group in sorted(grouped.values(), key=mean, reverse=True)
-    ]
+        ratios = [float(row["timeVolumeRatio"]) for _, _, row in valid if row.get("timeVolumeRatio") is not None]
+        scores = [float(row["score"]) * (1 if change >= 0 else -1) for _, change, row in valid if row.get("score") is not None]
+        results.append({"name": sector, "mean": round(sum(x[1] for x in valid) / len(valid), 2),
+                        "volume_ratio_mean": round(sum(ratios) / len(ratios), 2) if ratios else None,
+                        "dirRScore": round(sum(scores) / len(scores), 2) if scores else None,
+                        "count": len(valid), "total": len(set(symbols)), "up": sum(x[1] > 0 for x in valid),
+                        "down": sum(x[1] < 0 for x in valid),
+                        "leaders": sum(abs(x[1]) >= 1 and float(x[2].get("timeVolumeRatio") or 0) >= 1.5 for x in valid)})
+    return sorted(results, key=lambda item: item["mean"], reverse=True)
 
 
 def _refresh_scan_cache() -> None:
-    global SCAN_CACHE_UPDATED_AT
+    global SCAN_CACHE_UPDATED_AT, LAST_CACHE_SAVE_AT
+    _flush_completed_candles(datetime.now(IST))
     snapshots = {}
     for timeframe in ("intraday", "regular"):
         snapshots[timeframe] = {
             "stocks": build_rows(timeframe, "stocks", "ALL"),
             "index": build_rows(timeframe, "index", "ALL"),
         }
+    # Store one snapshot per minute for momentum acceleration; no lookahead.
+    snapshot_time = time.time()
+    for row in snapshots["intraday"]["stocks"]:
+        name = row["symbol"]
+        samples = SCORE_HISTORY.setdefault(name, deque(maxlen=45))
+        if not samples or snapshot_time - samples[-1][0] >= 58:
+            samples.append((snapshot_time, float(row["score"])))
+        for minutes in (5, 15, 30):
+            older = [score for ts, score in samples if ts <= snapshot_time - minutes * 60]
+            row[f"scoreDelta{minutes}"] = round(float(row["score"]) - older[-1], 1) if older else None
+        delta = row.get("scoreDelta5")
+        row["momentumState"] = "accelerating" if delta is not None and delta >= 4 else ("fading" if delta is not None and delta <= -4 else "steady")
     sector_flow = build_sector_flow(snapshots["intraday"]["stocks"])
 
     with SCAN_CACHE_LOCK:
@@ -1588,6 +1724,10 @@ def _refresh_scan_cache() -> None:
         SECTOR_FLOW_CACHE.clear()
         SECTOR_FLOW_CACHE.extend(sector_flow)
         SCAN_CACHE_UPDATED_AT = time.time()
+    # Persist completed 5m candles periodically; at restart only gaps need API recovery.
+    if HISTORY_SEED_DATE and time.time() - LAST_CACHE_SAVE_AT >= 300 and not RECOVERY_STARTED and not SEED_IN_PROGRESS:
+        LAST_CACHE_SAVE_AT = time.time()
+        threading.Thread(target=_save_history_cache, args=(HISTORY_SEED_DATE,), name="cache-save", daemon=True).start()
 
 
 def _start_scan_compute() -> None:
@@ -1629,6 +1769,14 @@ def initialize_live() -> None:
         if kite is not None and SYMBOL_TO_TOKEN:
             if not _load_history_cache():
                 _start_history_seed(force=False)
+            elif HISTORY_SEED_DATE and HISTORY_SEED_DATE < datetime.now(IST).date():
+                _start_incremental_refresh()
+            if FAST_MODE:
+                with DATA_LOCK:
+                    DETAIL_SYMBOLS.update(_fast_symbol_candidates()[:FAST_SYMBOL_LIMIT])
+            else:
+                with DATA_LOCK:
+                    DETAIL_SYMBOLS.update(SYMBOL_TO_TOKEN)
             _start_ticker()
         else:
             log.warning("Live init: instruments not loaded (missing credentials or symbols).")
@@ -1709,6 +1857,8 @@ def health():
             "ticks": TOTAL_TICKS,
             "last_tick": datetime.fromtimestamp(LAST_TICK_TS, IST).isoformat() if LAST_TICK_TS else None,
             "cache_ready": bool(SCAN_CACHE_UPDATED_AT),
+            "futures_enabled": ENABLE_FUTURES_OI,
+            "authentication": "numbers_txt_allowlist",
             "cache_updated_at": datetime.fromtimestamp(SCAN_CACHE_UPDATED_AT, IST).isoformat() if SCAN_CACHE_UPDATED_AT else None,
             "history_cache_loaded": HISTORY_CACHE_LOADED,
             "history_seed_date": HISTORY_SEED_DATE.isoformat() if HISTORY_SEED_DATE else None,
@@ -1772,6 +1922,7 @@ def scan():
         "nifty_index": _official_nifty_quote(),
         "sector_flow": sector_flow,
         "ticks": TOTAL_TICKS,
+        "last_tick": datetime.fromtimestamp(LAST_TICK_TS, IST).isoformat() if LAST_TICK_TS else None,
         "rows": rows,
     }
 
@@ -1779,6 +1930,79 @@ def scan():
     resp.headers["ETag"] = etag
     resp.headers["Cache-Control"] = "private, max-age=0, must-revalidate"
     return resp
+
+
+@app.get("/api/stock/<symbol>/candles")
+def stock_candles(symbol: str):
+    phone = normalize_access_number(request.args.get("access_phone"))
+    session_id = clean_env(request.args.get("access_session_id", ""))
+    if not access_session_is_active(phone, session_id):
+        return jsonify({"error": "access_required"}), 403
+    token = SYMBOL_TO_TOKEN.get(symbol.upper())
+    if not token:
+        return jsonify({"error": "unknown_symbol"}), 404
+    with DATA_LOCK:
+        frame = HISTORY.get(token, {}).get("intraday")
+        builder = CANDLE_BUILDERS.get(token)
+        partial = builder.partial() if builder else None
+    if frame is None or frame.empty:
+        return jsonify({"symbol": symbol, "candles": [], "status": "waiting_for_history"})
+    day = datetime.now(IST).date()
+    if not (frame["date"].dt.date == day).any():
+        day = frame.iloc[-1]["date"].date()
+    rows = frame[frame["date"].dt.date == day].tail(75).to_dict("records")
+    if partial and partial["date"].date() == day:
+        rows.append(partial)
+    candles = [{"time": row["date"].isoformat(), **{k: round(float(row[k]), 3) for k in ("open", "high", "low", "close", "volume")},
+                "partial": partial is not None and row["date"] == partial["date"]} for row in rows]
+    return jsonify({"symbol": symbol.upper(), "candles": candles})
+
+
+@app.get("/api/replay")
+def replay():
+    phone = normalize_access_number(request.args.get("access_phone"))
+    session_id = clean_env(request.args.get("access_session_id", ""))
+    if not access_session_is_active(phone, session_id):
+        return jsonify({"error": "access_required"}), 403
+    try:
+        day = date.fromisoformat(request.args.get("date", ""))
+    except ValueError:
+        return jsonify({"error": "date must be YYYY-MM-DD"}), 400
+    if day > datetime.now(IST).date():
+        return jsonify({"error": "future_date"}), 400
+    symbol = request.args.get("symbol", "").upper()
+    if symbol not in SYMBOL_TO_TOKEN:
+        return jsonify({"error": "unknown_symbol"}), 404
+    with DATA_LOCK:
+        frame = HISTORY.get(SYMBOL_TO_TOKEN[symbol], {}).get("intraday")
+        frame = frame.copy() if frame is not None else pd.DataFrame()
+    return jsonify({"symbol": symbol, "date": day.isoformat(), "mode": "simplified_historical_replay",
+                    "limitations": "5m OHLCV replay, not a reconstruction of tick order flow or the full live score",
+                    "rows": replay_session(frame, day)})
+
+
+@app.get("/api/futures")
+def futures():
+    phone = normalize_access_number(request.args.get("access_phone"))
+    session_id = clean_env(request.args.get("access_session_id", ""))
+    if not access_session_is_active(phone, session_id):
+        return jsonify({"error": "access_required"}), 403
+    with DATA_LOCK:
+        quotes = dict(FUTURES_QUOTES)
+        symbols = dict(FUTURES_TOKENS)
+    rows = []
+    for token, record in quotes.items():
+        base_oi, base_price = record["base_oi"], record["base_price"]
+        oi_pct = (record["oi"] / base_oi - 1) * 100 if base_oi else 0
+        price_pct = (record["ltp"] / base_price - 1) * 100 if base_price else 0
+        classification = ("Long build-up" if oi_pct > 0 and price_pct > 0 else
+                          "Short build-up" if oi_pct > 0 and price_pct < 0 else
+                          "Short covering" if oi_pct < 0 and price_pct > 0 else
+                          "Long unwinding" if oi_pct < 0 and price_pct < 0 else "Neutral")
+        rows.append({"symbol": symbols.get(token), "ltp": record["ltp"], "priceChange": round(price_pct, 2),
+                     "oiChange": round(oi_pct, 2), "classification": classification,
+                     "baseline": "first observed tick this market session", "asOf": datetime.fromtimestamp(record["ts"], IST).isoformat()})
+    return jsonify({"enabled": ENABLE_FUTURES_OI, "rows": sorted(rows, key=lambda row: abs(row["oiChange"]), reverse=True)})
 
 
 # ----------------------------
