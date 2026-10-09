@@ -15,7 +15,7 @@ def test_branding_and_hover_chart_removed():
     assert 'data-tradingview-symbol' in html
 
 
-def test_all_six_leaderboards_scroll_seven_visible_rows():
+def test_all_six_leaderboards_scroll_six_visible_rows():
     css=(ROOT/'premium-terminal.css').read_text(encoding='utf8')
     for selector in ('.leaders-side .leader-list', '#volumeRatioView .leader-list','#changeView .leader-list'):
         assert selector in css

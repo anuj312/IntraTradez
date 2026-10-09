@@ -37,8 +37,8 @@ def test_seven_visible_rows_with_sticky_headers_and_scroll():
         assert f'id="{id_}" role="region" tabindex="0"' in HTML
 
 
-def test_maximum_fifteen_results_and_refresh_keeps_scroll():
-    assert 'const LEADERBOARD_MAX_STOCKS = 15;' in HTML
+def test_maximum_ten_results_and_refresh_keeps_scroll():
+    assert 'const LEADERBOARD_MAX_STOCKS = 10;' in HTML
     assert HTML.count('.slice(0, LEADERBOARD_MAX_STOCKS)') == 6
     assert HTML.count('updateScrollingLeaderboard("') == 6
     assert 'const oldTop = host.scrollTop;' in HTML

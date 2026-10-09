@@ -306,7 +306,7 @@ h1::after { content: "PRO"; display: inline-flex; vertical-align: middle; transf
 @media (prefers-reduced-motion: reduce) {
   .topline,.toolbar,.summary-card { animation: none !important; }
 }
-/* TREND HUNTER · 7-row viewport with internal scrolling up to 15 stocks.
+/* TREND HUNTER · six-row viewport with internal scrolling up to 10 stocks.
    The viewport includes one 40px column-header row and exactly seven
    65px data rows. Both sides remain the same height regardless of result count. */
 .content-grid > .leaders-side,
@@ -695,4 +695,98 @@ h1 { margin-top: 6px; font-size: clamp(25px, 2.4vw, 36px); }
   .access-cta { padding: 10px 12px; gap: 5px; width: min(320px, calc(100% - 20px)); }
   #sectorFlow .flow-head { padding: 8px 10px; }
   #sectorFlow .flow-sort { flex-wrap: wrap; gap: 3px; }
+}
+
+
+/* TREND HUNTER | SIX-STOCK TABLE WINDOWS + FULL-HEIGHT SECTOR FLOW
+   Display only six stocks at a time on standard desktop screens, retaining
+   up to 10 real rows and independent scroll for every leaderboard.
+   Very short/mobile screens gracefully show fewer rows instead of scrolling
+   the outer document or clipping the bottom half of the dashboard. */
+:root { --th-stock-row-height: clamp(42px, calc((100dvh - 420px) / 6), 65px); }
+.leaders-side .leader-list,
+#volumeRatioView .leader-list,
+#changeView .leader-list {
+  max-height: calc(40px + 6 * var(--th-stock-row-height)) !important;
+  flex: 0 1 auto !important;
+  min-height: 0 !important;
+  overflow-y: auto !important;
+  overscroll-behavior-y: contain;
+  scrollbar-width: thin !important;
+}
+.leaders-side .leader-table tbody tr,
+#volumeRatioView .leader-table tbody tr,
+#changeView .leader-table tbody tr {
+  height: var(--th-stock-row-height) !important;
+}
+
+/* Make each sector plot use all height between the panel head and its labels.
+   Its zero reference stays auto-normalized (30–70%), but bar lengths are
+   relative to the actual available height rather than a fixed pixel value. */
+#sectorFlow .flow-list {
+  display: flex;
+  align-items: stretch;
+  flex: 1 1 0;
+  height: 100%;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: hidden;
+  padding: clamp(12px, 2vh, 24px) clamp(9px, 1.4vw, 22px) clamp(16px, 2vh, 22px);
+}
+#sectorFlow .flow-row {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  flex: 1 1 0;
+}
+#sectorFlow .flow-bar-zone {
+  position: relative;
+  flex: 1 1 0;
+  height: auto;
+  min-height: 0;
+  width: 100%;
+  margin-bottom: 0;
+  background-image: repeating-linear-gradient(to bottom, rgba(185,205,238,.075) 0 1px, transparent 1px 25%);
+}
+#sectorFlow .flow-name { flex: 0 0 auto; margin-top: clamp(7px, 1.4vh, 15px); }
+#sectorFlow .flow-value { flex: 0 0 auto; }
+#sectorFlow .flow-name-metric { flex: 0 0 auto; }
+#sectorFlow .flow-fill { min-height: 5px; max-height: 98%; }
+@media (max-width: 760px) {
+  :root { --th-stock-row-height: 41px; }
+  #sectorFlow .flow-list { padding: 10px 5px 14px; gap: 2px; }
+  #sectorFlow .flow-row { height: 100%; min-height: 0; }
+  #sectorFlow .flow-bar-zone { flex: 1 1 0; height: auto; min-height: 0; margin: 0; }
+  #sectorFlow .flow-name { margin-top: 7px; }
+  #sectorFlow .flow-fill { width: min(10px, 72%); min-width: 3px; }
+}
+@media (max-height: 700px) and (min-width: 761px) {
+  :root { --th-stock-row-height: clamp(36px, calc((100dvh - 390px) / 6), 52px); }
+  #sectorFlow .flow-list { padding-top: 8px; padding-bottom: 10px; }
+}
+@media (min-width: 761px) and (max-height: 760px) {
+  .leaders-side .leader-table td,
+  #volumeRatioView .leader-table td,
+  #changeView .leader-table td { padding-top: 6px; padding-bottom: 6px; }
+  .leaders-side .leader-chip,
+  #volumeRatioView .leader-chip,
+  #changeView .leader-chip { width: 29px; height: 29px; flex-basis: 29px; }
+  .leaders-side .leader-sector,
+  #volumeRatioView .leader-sector,
+  #changeView .leader-sector { margin-top: 2px; }
+}
+/* On a full-height phone six compact rows also fit inside each stacked panel. */
+@media (max-width: 760px) and (min-height: 800px) {
+  :root { --th-stock-row-height: 38px; }
+}
+@media (max-width: 760px) {
+  /* Mobile table headings are 28px, not the desktop 40px. */
+  .leaders-side .leader-list,
+  #volumeRatioView .leader-list,
+  #changeView .leader-list {
+    max-height: calc(28px + 6 * var(--th-stock-row-height)) !important;
+  }
 }
