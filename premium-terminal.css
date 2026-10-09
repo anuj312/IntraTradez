@@ -157,6 +157,7 @@ h1::after { content: "PRO"; display: inline-flex; vertical-align: middle; transf
 .feed-chip { font-family: var(--font-data); font-weight: 700; }
 .feed-chip.live { color: var(--pos); border-color: var(--pos-line); background: var(--pos-bg); }
 .feed-chip.snapshot,.feed-chip.seeding { color: var(--amb); border-color: var(--amb-line); background: var(--amb-bg); }
+.feed-chip.invalid_token { color: var(--neg); border-color: var(--neg-line); background: var(--neg-bg); }
 .ticks-chip { color: var(--muted); font: 600 10px var(--font-data); }
 .nifty-regime-card { border: 1px solid var(--line); background: var(--surface-2); }
 .nifty-regime-label,.nifty-regime-strength { font-family: var(--font-data); }

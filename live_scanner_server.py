@@ -35,6 +35,7 @@ except Exception:  # pragma: no cover
     Compress = None  # type: ignore
 
 from kiteconnect import KiteConnect, KiteTicker
+from kiteconnect.exceptions import TokenException
 
 from sector_definitions import ALL_SYMBOLS, SECTOR_DEFINITIONS
 from scanner_features import FiveMinuteBuilder, market_bucket, merge_finished, cumulative_slot_ratio, one_way_metrics, breakout_signals, replay_session
@@ -94,6 +95,7 @@ FAST_SELECTION_WAIT_SEC = int(os.getenv("FAST_SELECTION_WAIT_SEC", "20"))
 FAST_RESELECT_SEC = int(os.getenv("FAST_RESELECT_SEC", "300"))
 
 SCAN_COMPUTE_EVERY_SEC = float(os.getenv("SCAN_COMPUTE_EVERY_SEC", "8"))
+INVALID_KITE_TOKEN = False
 
 PREMARKET_SEED_TIME = parse_clock(os.getenv("PREMARKET_SEED_TIME", "07:30"), dtime(7, 30))
 
@@ -125,6 +127,7 @@ TICK_STATE: Dict[int, Dict[str, Any]] = {}
 PRICE_HISTORY: Dict[int, deque] = {}
 HISTORY: Dict[int, Dict[str, pd.DataFrame]] = {}
 CANDLE_BUILDERS: Dict[int, FiveMinuteBuilder] = {}
+LAST_CONFIRMED_CANDLE: Dict[int, dict] = {}
 VOLUME_PROFILE_CACHE: Dict[int, tuple] = {}
 SCORE_HISTORY: Dict[str, deque] = {}
 FUTURES_TOKENS: Dict[int, str] = {}
@@ -271,6 +274,9 @@ def _feed_status() -> tuple[str, bool]:
     """
     now = datetime.now(IST)
 
+    if INVALID_KITE_TOKEN:
+        return "invalid_token", False
+
     if kite is None or not SYMBOL_TO_TOKEN:
         return "missing_credentials", False
 
@@ -282,11 +288,11 @@ def _feed_status() -> tuple[str, bool]:
 
     fresh = LAST_TICK_TS and (time.time() - LAST_TICK_TS) <= TICK_STALE_SEC
 
-    if SEED_IN_PROGRESS:
-        return "seeding", bool(TICKER_CONNECTED and fresh)
-
     if TICKER_CONNECTED and fresh:
         return "live", True
+
+    if SEED_IN_PROGRESS:
+        return "seeding", False
 
     if not _has_current_session_data(now):
         return "previous_session", False
@@ -431,13 +437,25 @@ def _write_history_cache(seed_date: date) -> None:
 # ----------------------------
 
 def load_instruments() -> None:
-    global kite
+    global kite, INVALID_KITE_TOKEN
     if not API_KEY or not ACCESS_TOKEN:
         log.warning("Kite credentials missing; dashboard remains offline (never simulated).")
         return
 
     kite = KiteConnect(api_key=API_KEY)
     kite.set_access_token(ACCESS_TOKEN)
+
+    # Abort before the history loop if today's Kite access token has expired.
+    # Historical requests must never be used to diagnose a bad session one
+    # symbol at a time (that causes hundreds of TokenException logs).
+    try:
+        kite.profile()
+        INVALID_KITE_TOKEN = False
+    except TokenException:
+        INVALID_KITE_TOKEN = True
+        kite = None
+        log.error("Kite access token invalid/expired: refresh KITE_ACCESS_TOKEN before market open")
+        return
 
     frame = pd.DataFrame(kite.instruments("NSE"))
     if frame.empty or "tradingsymbol" not in frame.columns:
@@ -486,6 +504,7 @@ def _append_closed(token: int, candle: dict) -> None:
         return
     histories = HISTORY.setdefault(token, {})
     histories["intraday"] = merge_finished(histories.get("intraday"), [candle])
+    LAST_CONFIRMED_CANDLE[token] = dict(candle)
 
 
 def _flush_completed_candles(now: datetime) -> None:
@@ -592,7 +611,8 @@ def _start_ticker() -> None:
                         ws.set_mode(ws.MODE_FULL, full_tokens)
 
                     TICKER_CONNECTED = True
-                    _start_gap_recovery()
+                    if HISTORY and not SEED_IN_PROGRESS:
+                        _start_gap_recovery()
                     log.info(
                         "KiteTicker connected: %s quote tokens, %s full-depth tokens",
                         len(tokens),
@@ -724,6 +744,12 @@ def _seed_symbol(symbol: str, token: int) -> None:
         if bucket is not None and not completed.empty:
             completed = completed[completed["date"] < bucket].reset_index(drop=True)
         with DATA_LOCK:
+            # Seeding can finish after ticks have already started. Preserve
+            # any locally closed candles (and the live partial builder) rather
+            # than overwriting them with a slow network response.
+            existing = HISTORY.get(token, {}).get("intraday")
+            if existing is not None and not existing.empty:
+                completed = merge_finished(completed, existing.to_dict("records"))
             HISTORY[token] = {"intraday": completed, "regular": _normalize_history(daily)}
     finally:
         time.sleep(HISTORY_SLEEP_SEC)
@@ -803,6 +829,7 @@ def _prepare_for_new_market_day(today: date) -> None:
         PRICE_HISTORY.clear()
         TICK_STATE.clear()
         CANDLE_BUILDERS.clear()
+        LAST_CONFIRMED_CANDLE.clear()
         VOLUME_PROFILE_CACHE.clear()
         SCORE_HISTORY.clear()
         FUTURES_QUOTES.clear()
@@ -1112,6 +1139,10 @@ def _trend_features(frame: pd.DataFrame, ltp: float, now: datetime) -> dict:
 
     current = frame[frame["date"].dt.date == now.date()].copy()
     if current.empty:
+        if market_is_open(now):
+            # Yesterday's VWAP is not today's VWAP. Until the first partial
+            # candle arrives, these intraday trend signals are unavailable.
+            return empty
         latest_date = frame["date"].dt.date.max()
         current = frame[frame["date"].dt.date == latest_date].copy()
     if current.empty:
@@ -1207,7 +1238,17 @@ def _intraday_volume_ratio(token: int, frame: pd.DataFrame, volume: float, now: 
         medians = stored[1]
     slot = max(0, min(74, int((now.hour * 60 + now.minute - 555) // 5)))
     baseline = medians.get(slot)
-    return round(max(0., volume / baseline), 2) if baseline else 1.0
+    if baseline and market_is_open(now):
+        # The historical slot baseline is measured at the END of its 5m
+        # candle. A live quote at 09:16 should instead be compared with the
+        # expected progress through that candle, not all of 09:15-09:20.
+        bucket = market_bucket(now)
+        if bucket is not None:
+            fraction = max(0.08, min(1.0, (now - bucket).total_seconds() / 300.0))
+            previous = medians.get(slot - 1, 0.0) if slot > 0 else 0.0
+            if previous is not None:
+                baseline = float(previous) + (float(baseline) - float(previous)) * fraction
+    return round(max(0., volume / baseline), 2) if baseline and baseline > 0 else 1.0
 
 
 def _live_candles(token: int, now: datetime) -> list[dict]:
@@ -1534,6 +1575,9 @@ def _build_row(symbol: str, sector: str, timeframe: str) -> Optional[dict]:
     row["score"] = _advanced_score(row)
     row["asOf"] = datetime.fromtimestamp((TICK_STATE.get(token) or {}).get("ts") or 0, IST).isoformat() if (TICK_STATE.get(token) or {}).get("ts") else None
     row["fresh"] = bool(row["asOf"] and time.time() - TICK_STATE[token]["ts"] <= TICK_STALE_SEC)
+    row["tradedVolume"] = round(float(TICK_STATE.get(token, {}).get("volume") or 0)) if row["asOf"] else None
+    row["scoreStatus"] = "provisional" if timeframe == "intraday" and market_is_open(now) else "historical"
+    row["scoreSource"] = "history_and_ticks"
     if timeframe == "intraday":
         today = frame[frame["date"].dt.date == now.date()]
         row.update(one_way_metrics(today, row["direction"]))
@@ -1548,6 +1592,125 @@ def _build_row(symbol: str, sector: str, timeframe: str) -> Optional[dict]:
         row["momentum30"] = round((ltp / float(frame.iloc[-7]["close"]) - 1) * 100, 2) if len(frame) > 6 else None
 
     return row
+
+
+def _last_closed_five_minute(token: int, now: datetime) -> Optional[dict]:
+    """Completed 5m candle only; never treat the live builder as confirmed."""
+    with DATA_LOCK:
+        latest = LAST_CONFIRMED_CANDLE.get(token)
+        if not latest or latest["date"].date() != now.date():
+            frame = HISTORY.get(token, {}).get("intraday")
+            if frame is None or frame.empty:
+                return None
+            today = frame[frame["date"].dt.date == now.date()]
+            if today.empty:
+                return None
+            closed = today[today["date"] + pd.Timedelta(minutes=5) <= now]
+            if closed.empty:
+                return None
+            latest = closed.iloc[-1].to_dict()
+            LAST_CONFIRMED_CANDLE[token] = latest
+        latest = dict(latest)
+    if latest["date"] + timedelta(minutes=5) > now:
+        return None
+    open_price, close_price = float(latest["open"]), float(latest["close"])
+    momentum_pct = (close_price / open_price - 1) * 100 if open_price > 0 else None
+    return {
+        "start": latest["date"].isoformat(),
+        "end": (latest["date"] + pd.Timedelta(minutes=5)).isoformat(),
+        "close": round(close_price, 2),
+        "momentumPct": round(momentum_pct, 2) if momentum_pct is not None else None,
+        # Stable, price-only candle strength (0-100); NOT the composite
+        # multi-indicator live score. Only closed prices enter this metric.
+        "priceMomentumScore": round(min(100., abs(momentum_pct) * 16.), 1) if momentum_pct is not None else None,
+    }
+
+
+def _live_quote_row(symbol: str, sector: str, now: datetime) -> Optional[dict]:
+    """Immediate quote-first row, even while the history seed is incomplete.
+
+    A provisional tick-only score is intentionally NOT passed off as the full
+    baseline-dependent composite score. Missing RSI, ADX and volume ratio
+    remain null until real historical inputs arrive.
+    """
+    token = SYMBOL_TO_TOKEN.get(symbol)
+    if not token:
+        return None
+    with DATA_LOCK:
+        tick = dict(TICK_STATE.get(token) or {})
+        builder = CANDLE_BUILDERS.get(token)
+        partial = builder.partial() if builder else None
+    if tick.get("day") != now.date() or not market_is_open(now):
+        return None
+    ltp = _as_float(tick.get("ltp"))
+    if ltp is None or ltp <= 0:
+        return None
+    ohlc = tick.get("ohlc") or {}
+    open_price = _as_float(ohlc.get("open"))
+    reference = open_price if open_price and open_price > 0 else _as_float(ohlc.get("close"))
+    if not reference or reference <= 0:
+        return None
+    change = (ltp / reference - 1.0) * 100.0
+    candle_open = _as_float(partial.get("open")) if partial else None
+    current_5m = (ltp / candle_open - 1.0) * 100.0 if candle_open and candle_open > 0 else 0.0
+    # Quote-only stopgap: direction and price movement, no invented volume
+    # normalization or RSI. Full composite replaces this when history loads.
+    provisional_score = min(100.0, max(0.0, abs(change) * 16.0 + abs(current_5m) * 12.0))
+    tick_time = float(tick.get("ts") or 0)
+    positive = change >= 0
+    return {
+        "symbol": symbol, "display": symbol, "sector": sector,
+        "ltp": round(ltp, 2), "change": round(change, 2),
+        "tradedVolume": int(float(tick.get("volume") or 0)),
+        "changeBasis": "open" if open_price and open_price > 0 else "previous_close",
+        "direction": 1 if positive else -1, "score": round(provisional_score, 2),
+        "scoreStatus": "provisional", "scoreSource": "live_quote_only",
+        "ratio": None, "volume": None, "timeVolumeRatio": None,
+        "volumeBaselineReady": False, "rsi": None, "adx": None,
+        "rfactor": None, "ema": None, "vwapGap": None, "emaTrend5": None,
+        "emaTrend15": None, "spark": "", "rank": 0, "isIndex": False,
+        "volatility": "high" if abs(change) >= 2.5 else "medium" if abs(change) >= 1 else "low",
+        "asOf": datetime.fromtimestamp(tick_time, IST).isoformat() if tick_time else None,
+        "fresh": bool(tick_time and time.time() - tick_time <= TICK_STALE_SEC),
+        "lastCompleted5m": _last_closed_five_minute(token, now),
+    }
+
+
+def _quote_first_rows(timeframe: str, universe: str, sector: str, cached: List[dict]) -> List[dict]:
+    """Update LTP/% change directly from Kite ticks, bypassing slow scoring."""
+    if universe != "stocks" or not market_is_open():
+        return cached
+    now = datetime.now(IST)
+    # Historical cache rows without today's Kite quotes must NOT be mixed into
+    # the opening-bell leaderboards and mistaken for current market movers.
+    with DATA_LOCK:
+        active_symbols = {
+            TOKEN_TO_SYMBOL[token]
+            for token, tick in TICK_STATE.items()
+            if token in TOKEN_TO_SYMBOL and tick.get("day") == now.date()
+        }
+    by_symbol = {row["symbol"]: row for row in cached if row["symbol"] in active_symbols}
+    symbols = SECTOR_DEFINITIONS.get(sector, []) if sector != "ALL" else ALL_SYMBOLS
+    for symbol in dict.fromkeys(symbols):
+        quote = _live_quote_row(symbol, PRIMARY_SECTOR.get(symbol, "OTHER"), now)
+        if quote is None:
+            continue
+        row = by_symbol.get(symbol)
+        if row is None:
+            by_symbol[symbol] = quote
+            continue
+        # The expensive indicators retain their computed values, while
+        # high-priority price fields are fresh at each API request.
+        for key in ("ltp", "change", "direction", "changeBasis", "asOf", "fresh", "lastCompleted5m", "tradedVolume"):
+            row[key] = quote[key]
+        row["scoreStatus"] = "provisional" if timeframe == "intraday" else "historical"
+        if row.get("scoreSource") == "live_quote_only":
+            row["score"] = quote["score"]
+        # A previous-session historical row may be visible during today's
+        # background seed; never let it masquerade as an entirely live score.
+    # Baseline-free rows deliberately retain their quote-only score; running
+    # the historical composite here would fabricate unavailable indicators.
+    return _rank(list(by_symbol.values()))
 
 
 INDEX_GROUPS = {
@@ -1658,6 +1821,7 @@ def _rows_from_cache(timeframe: str, universe: str, sector: str) -> List[dict]:
         rows = [dict(row) for row in SCAN_CACHE.get(timeframe, {}).get(universe, [])]
     if universe == "stocks" and sector != "ALL":
         rows = [row for row in rows if row.get("symbol") in SECTOR_DEFINITIONS.get(sector, [])]
+    rows = _quote_first_rows(timeframe, universe, sector, rows)
     rows = _directional_rank(rows, "_scan_score")
     for row in rows:
         row.pop("_scan_score", None)
@@ -1767,6 +1931,9 @@ def initialize_live() -> None:
     try:
         load_instruments()
         if kite is not None and SYMBOL_TO_TOKEN:
+            # Always subscribe before any potentially slow history/bootstrap
+            # work. Quotes must not wait for an entire universe to be seeded.
+            _start_ticker()
             if not _load_history_cache():
                 _start_history_seed(force=False)
             elif HISTORY_SEED_DATE and HISTORY_SEED_DATE < datetime.now(IST).date():
@@ -1777,7 +1944,6 @@ def initialize_live() -> None:
             else:
                 with DATA_LOCK:
                     DETAIL_SYMBOLS.update(SYMBOL_TO_TOKEN)
-            _start_ticker()
         else:
             log.warning("Live init: instruments not loaded (missing credentials or symbols).")
     except Exception:
@@ -1861,6 +2027,7 @@ def health():
             "authentication": "numbers_txt_allowlist",
             "cache_updated_at": datetime.fromtimestamp(SCAN_CACHE_UPDATED_AT, IST).isoformat() if SCAN_CACHE_UPDATED_AT else None,
             "history_cache_loaded": HISTORY_CACHE_LOADED,
+            "invalid_kite_token": INVALID_KITE_TOKEN,
             "history_seed_date": HISTORY_SEED_DATE.isoformat() if HISTORY_SEED_DATE else None,
             "seed_requested_date": SEED_REQUESTED_DATE.isoformat() if SEED_REQUESTED_DATE else None,
         }
@@ -1901,7 +2068,10 @@ def scan():
 
     # ETag / 304 (saves bandwidth if client revalidates)
     etag = f'W/"scan-{timeframe}-{universe}-{sector}-{limit}-{int(cache_updated_at)}"'
-    if request.headers.get("If-None-Match") == etag and cache_updated_at:
+    # The expensive score cache refreshes every few seconds, but LTP and
+    # cumulative volume now come directly from ticks at request time. A 304
+    # based only on the score-cache timestamp would hide those live changes.
+    if not market_is_open() and request.headers.get("If-None-Match") == etag and cache_updated_at:
         resp = Response(status=304)
         resp.headers["ETag"] = etag
         resp.headers["Cache-Control"] = "private, max-age=0, must-revalidate"
@@ -1914,6 +2084,8 @@ def scan():
         "live": live,
         "status": status,
         "market_open": market_is_open(),
+        "quote_first": True,
+        "score_phase": "live_provisional_with_closed_5m_snapshots",
         "updated_at": datetime.fromtimestamp(cache_updated_at, IST).strftime("%H:%M:%S IST") if cache_updated_at else None,
         "seed": dict(SEED_PROGRESS),
         "fast_mode": FAST_MODE,
@@ -1928,7 +2100,7 @@ def scan():
 
     resp = jsonify(payload)
     resp.headers["ETag"] = etag
-    resp.headers["Cache-Control"] = "private, max-age=0, must-revalidate"
+    resp.headers["Cache-Control"] = "no-store" if market_is_open() else "private, max-age=0, must-revalidate"
     return resp
 
 

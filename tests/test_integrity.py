@@ -22,7 +22,10 @@ def test_original_numbers_txt_auth_restored():
 def test_original_render_config_restored():
     conf = (ROOT / 'render.yaml').read_text()
     assert 'rootDir: outputs' in conf
-    assert 'uvicorn app:app' in conf
+    assert 'uvicorn main:app' in conf
     assert 'gunicorn app:app' not in conf
     assert 'mountPath: /var/data' not in conf
     assert 'TWILIO_' not in conf
+    wrapper = (ROOT / 'main.py').read_text()
+    assert 'WsgiToAsgi(flask_app)' in wrapper
+    assert 'pre-market-warmup' in wrapper

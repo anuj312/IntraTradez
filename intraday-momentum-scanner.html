@@ -2970,6 +2970,7 @@ h1::after { content: "PRO"; display: inline-flex; vertical-align: middle; transf
 .feed-chip { font-family: var(--font-data); font-weight: 700; }
 .feed-chip.live { color: var(--pos); border-color: var(--pos-line); background: var(--pos-bg); }
 .feed-chip.snapshot,.feed-chip.seeding { color: var(--amb); border-color: var(--amb-line); background: var(--amb-bg); }
+.feed-chip.invalid_token { color: var(--neg); border-color: var(--neg-line); background: var(--neg-bg); }
 .ticks-chip { color: var(--muted); font: 600 10px var(--font-data); }
 .nifty-regime-card { border: 1px solid var(--line); background: var(--surface-2); }
 .nifty-regime-label,.nifty-regime-strength { font-family: var(--font-data); }
@@ -3820,6 +3821,26 @@ els.sector.appendChild(option);
 // No client-side simulated ticks, quotes or scores are shipped in production.
 
 function formatNumber(number, digits = 1) { return Number(number).toFixed(digits); }
+function hasVolumeRatio(row) { return row.volumeBaselineReady !== false && row.ratio != null && Number.isFinite(Number(row.ratio)); }
+function formattedRatio(row) {
+  if (hasVolumeRatio(row)) return `${formatNumber(row.ratio, 2)}×`;
+  // Label the underlying raw exchange volume explicitly; do not invent a
+  // volume ratio when the historical reference is not ready.
+  if (row.tradedVolume != null) {
+    const n = Number(row.tradedVolume);
+    return `Vol ${n >= 1e7 ? formatNumber(n / 1e7, 1) + "Cr" : n >= 1e5 ? formatNumber(n / 1e5, 1) + "L" : n >= 1e3 ? formatNumber(n / 1e3, 1) + "K" : Math.round(n)}`;
+  }
+  return "—";
+}
+function liveTradedVolume(row) { return row.tradedVolume == null ? "Traded volume unavailable" : `Live traded volume: ${Number(row.tradedVolume).toLocaleString("en-IN")}`; }
+function metricOrDash(value, digits = 1) { return value == null || !Number.isFinite(Number(value)) ? "—" : formatNumber(value, digits); }
+function scoreLabel(row) {
+  // Historical composite and tick-only fallback have different availability.
+  // The tilde and hover title keep provisional scores explicitly labeled.
+  const provisional = row.scoreStatus === "provisional";
+  const source = row.scoreSource === "live_quote_only" ? "Quote-only estimate; historical indicators loading" : "Live composite score; 5-minute confirmation shown in feed";
+  return `<span title="${provisional ? source : "Historical score"}">${provisional ? "~" : ""}${scoreMultiplier(row.score)}</span>`;
+}
 
 function scoreMultiplier(number, showSign = false) {
   const value = Number(number);
@@ -3929,7 +3950,9 @@ let scanTimer = null;
 function startScanPolling() {
   if (scanTimer) return;
   loadLiveData(true);
-  scanTimer = setInterval(() => { if (!document.hidden) loadLiveData(false); }, 10000);
+  // Live quotes are cheap: check every 3 seconds; expensive indicators are
+  // calculated asynchronously on the server and are never re-fetched per stock.
+  scanTimer = setInterval(() => { if (!document.hidden) loadLiveData(false); }, 3000);
 }
 function stopScanPolling() {
   if (scanTimer) clearInterval(scanTimer);
@@ -4056,9 +4079,9 @@ function updateScrollingLeaderboard(id, markup) {
 function renderMovers(allRows, universeRows = allRows) {
 
 // Header averages use every qualifying row, not just the visible top-15 leader slices.
-const buyUniverse = universeRows.filter(row => Number(row.change) > 0 && Number.isFinite(Number(row.ratio)));
+const buyUniverse = universeRows.filter(row => Number(row.change) > 0 && hasVolumeRatio(row));
 
-const sellUniverse = universeRows.filter(row => Number(row.change) < 0 && Number.isFinite(Number(row.ratio)));
+const sellUniverse = universeRows.filter(row => Number(row.change) < 0 && hasVolumeRatio(row));
 
 const averageRatio = rows => rows.length ? rows.reduce((sum, row) => sum + Number(row.ratio), 0) / rows.length : null;
 
@@ -4112,15 +4135,15 @@ return `<tr data-tradingview-symbol="${escapeHtml(row.symbol)}" tabindex="0" rol
 
 </td>
 
-<td class="leader-score">${scoreMultiplier(scoreValue(row))}</td>
+<td class="leader-score">${scoreLabel(row)}</td>
 
 <td class="leader-ltp ${ltpPercentTone(row.change)}">${change(row.change)}</td>
 
-<td class="leader-ratio ${ratioClass}">${formatNumber(row.ratio, 2)}×</td>
+<td class="leader-ratio ${ratioClass}" title="${liveTradedVolume(row)}">${formattedRatio(row)}</td>
 
-<td class="leader-rsi ${rsiClass}">${formatNumber(row.rsi, 1)}</td>
+<td class="leader-rsi ${rsiClass}">${metricOrDash(row.rsi, 1)}</td>
 
-<td><span class="leader-adx ${adxClass}">${formatNumber(row.adx, 1)}</span></td>
+<td><span class="leader-adx ${adxClass}">${metricOrDash(row.adx, 1)}</span></td>
 
 </tr>`;
 
@@ -4259,7 +4282,7 @@ emaTrend15: Number(indexRow.emaTrend15)
 
 const symbols = new Set(SECTOR_DEFINITIONS.NIFTY_50 || []);
 
-const rows = allRows.filter(row => symbols.has(String(row.symbol)) && Number.isFinite(Number(row.change)) && Number.isFinite(Number(row.ratio)));
+const rows = allRows.filter(row => symbols.has(String(row.symbol)) && Number.isFinite(Number(row.change)) && hasVolumeRatio(row));
 
 if (!rows.length) return null;
 
@@ -4531,7 +4554,7 @@ card.title = meta.join(" · ");
 
 function renderVolumeRatio(allRows) {
 
-const rows = allRows.filter(row => Number.isFinite(Number(row.ratio)));
+const rows = allRows.filter(hasVolumeRatio);
 
 const leaders = rows
 
@@ -4573,7 +4596,7 @@ return `<tr data-tradingview-symbol="${escapeHtml(row.symbol)}" tabindex="0" rol
 
 <td><div class="leader-stock"><div class="leader-chip ${tone}">${escapeHtml(chip)}</div><div class="leader-copy"><div class="leader-name" title="${escapeHtml(row.display)}">${escapeHtml(row.display)}</div><div class="leader-sector">${escapeHtml(sector)}</div></div></div></td>
 
-<td class="leader-ratio ${ratioClass}">${formatNumber(ratio, 2)}×</td>
+<td class="leader-ratio ${ratioClass}" title="${liveTradedVolume(row)}">${formattedRatio(row)}</td>
 
 <td class="leader-ltp ${ltpPercentTone(row.change)}">${change}</td>
 
@@ -4630,9 +4653,9 @@ return `<tr data-tradingview-symbol="${escapeHtml(row.symbol)}" tabindex="0" rol
 
 <td class="leader-ltp ${ltpPercentTone(row.change)}">${change}</td>
 
-<td class="leader-score">${scoreMultiplier(scoreValue(row))}</td>
+<td class="leader-score">${scoreLabel(row)}</td>
 
-<td class="leader-ratio ${Number(row.ratio) >= 1 ? "ratio-high" : "ratio-low"}">${formatNumber(row.ratio, 2)}×</td>
+<td class="leader-ratio ${Number(row.ratio) >= 1 ? "ratio-high" : "ratio-low"}" title="${liveTradedVolume(row)}">${formattedRatio(row)}</td>
 
 </tr>`;
 
@@ -4960,7 +4983,7 @@ document.getElementById("sectorModalTitle").textContent = sector.replaceAll("_",
 
 document.getElementById("sectorModalRows").innerHTML = rows.length
 
-? rows.map(row => `<div class="sector-stock-row" data-tradingview-symbol="${escapeHtml(row.symbol)}" tabindex="0" role="button" aria-label="Open ${escapeHtml(row.display)} on TradingView"><div class="sector-stock-name"><span class="sector-stock-dot ${row.direction > 0 ? "positive" : "negative"}"></span>${escapeHtml(row.display)}<span class="stock-chip">${escapeHtml(row.momentumState || "")}</span></div><div class="sector-modal-ratio">${row.volumeBaselineReady !== false && Number.isFinite(Number(row.ratio)) ? formatNumber(Number(row.ratio), 2) + "×" : "—"}</div><div class="sector-stock-score">${Math.round(Number(row.score ?? 0))}/100</div></div>`).join("")
+? rows.map(row => `<div class="sector-stock-row" data-tradingview-symbol="${escapeHtml(row.symbol)}" tabindex="0" role="button" aria-label="Open ${escapeHtml(row.display)} on TradingView"><div class="sector-stock-name"><span class="sector-stock-dot ${row.direction > 0 ? "positive" : "negative"}"></span>${escapeHtml(row.display)}<span class="stock-chip">${escapeHtml(row.momentumState || "")}</span></div><div class="sector-modal-ratio">${row.volumeBaselineReady !== false && hasVolumeRatio(row) ? formatNumber(Number(row.ratio), 2) + "×" : "—"}</div><div class="sector-stock-score">${Math.round(Number(row.score ?? 0))}/100</div></div>`).join("")
 
 : '<div class="sector-modal-empty">No constituent data is available yet.</div>';
 
@@ -5069,7 +5092,10 @@ document.getElementById("peakFoot").textContent = "vs. 20-session average";
 
 
 
-const feedLabels = { live: "Live", snapshot: "Previous session", offline: "Offline", seeding: "Seeding", delayed: "Delayed" };
+const feedLabels = { live: "Live", snapshot: "Previous session", offline: "Offline", seeding: "Seeding", delayed: "Delayed", invalid_token: "Kite token expired" };
+const completed5m = (Array.isArray(state.liveRows) ? state.liveRows : []).map(row => row.lastCompleted5m).filter(Boolean)
+  .sort((a,b) => String(b.end).localeCompare(String(a.end)))[0];
+const confirmation = completed5m ? `5m closed ${new Date(completed5m.end).toLocaleTimeString("en-IN", {timeZone:"Asia/Kolkata", hour:"2-digit", minute:"2-digit"})} / price strength ${completed5m.priceMomentumScore ?? "—"}/100` : "First 5m candle forming";
 
 const seedLabel = `Seeding (${Number(state.seedProgress.done || 0)}/${Number(state.seedProgress.total || 0)})`;
 
@@ -5091,7 +5117,7 @@ document.getElementById("feedStatusText").textContent =
 
 state.feedStatus === "live"
 
-? `Live / ${state.detailSymbols || state.universeSize || "all"} detailed / ${state.universeSize || "whole"} watched / last tick ${state.lastTick ? new Date(state.lastTick).toLocaleTimeString("en-IN", {timeZone:"Asia/Kolkata"}) : "—"}`
+? `Live / ${confirmation} / current score provisional / ${state.universeSize || "whole"} watched / last tick ${state.lastTick ? new Date(state.lastTick).toLocaleTimeString("en-IN", {timeZone:"Asia/Kolkata"}) : "—"}`
 
 : state.feedStatus === "snapshot"
 
@@ -5100,6 +5126,10 @@ state.feedStatus === "live"
 : state.feedStatus === "seeding"
 
 ? `${seedLabel} / whole universe watched`
+
+: state.feedStatus === "invalid_token"
+
+? "Kite token expired / refresh the Render access token"
 
 : "Trend Hunter / NSE universe · offline";
 
@@ -5249,11 +5279,11 @@ state.live = false;
 
 const previousSession = payload.status === "previous_session" || payload.status === "market_closed";
 
-state.feedStatus = payload.status === "seeding" ? "seeding" : previousSession ? "snapshot" : "offline";
+state.feedStatus = payload.status === "invalid_token" ? "invalid_token" : payload.status === "seeding" ? "seeding" : previousSession ? "snapshot" : "offline";
 
 render();
 
-if (manual) showToast(payload.status === "seeding" ? "History is still loading" : previousSession ? "Showing previous session data" : "Live feed unavailable; no simulated data shown");
+if (manual) showToast(payload.status === "seeding" ? "Waiting for first live quotes; baseline loading" : previousSession ? "Showing previous session data" : "Live feed unavailable; no simulated data shown");
 
 return;
 
@@ -5271,7 +5301,7 @@ state.ticks = Number.isFinite(Number(payload.ticks)) ? Number(payload.ticks) : s
 
 const previousSession = payload.status === "previous_session" || payload.status === "market_closed";
 
-state.feedStatus = payload.status === "seeding" ? "seeding" : state.live ? "live" : previousSession ? "snapshot" : "offline";
+state.feedStatus = state.live ? "live" : payload.status === "invalid_token" ? "invalid_token" : payload.status === "seeding" ? "seeding" : previousSession ? "snapshot" : "offline";
 
 
 
