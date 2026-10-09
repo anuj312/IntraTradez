@@ -499,3 +499,200 @@ body.theme-dark .sector-state--waiting { --state-ink: #a9b4c7; --state-border: r
   .sector-state-badge { transition: none; }
   .sector-stock-row:hover .sector-state-badge { transform: none; }
 }
+
+/* Trend Hunter — remove ONLY the outer/right-edge document scrollbar.
+   Do not lock page scrolling: a shorter laptop viewport must still be able to
+   reach the bottom without clipping the existing 7-row stock tables.
+   In particular, the Gainers/Losers, Volm Ratio and % Change .leader-list
+   scrollbars keep their explicit overflow-y:auto and visible thumbs above. */
+html,
+body {
+  scrollbar-width: none !important; /* Firefox: document only */
+  -ms-overflow-style: none;         /* Legacy Edge/IE */
+}
+html::-webkit-scrollbar,
+body::-webkit-scrollbar {
+  display: none !important;         /* Chrome / Edge / Safari: document only */
+  width: 0 !important;
+  height: 0 !important;
+}
+
+
+/* TREND HUNTER | ONE-SCREEN WORKSPACE (2026-10-09)
+   The document itself must never scroll. Responsive stock viewports scroll
+   independently, including Gainers/Losers, Volm Ratio and % Change.
+   A short display shows fewer rows at once; no stocks are removed. */
+html, body {
+  width: 100%; height: 100%; min-height: 0 !important;
+  overflow: hidden !important;
+  overscroll-behavior: none;
+}
+.app { height: 100vh; height: 100dvh; min-height: 0 !important; max-height: 100dvh; overflow: hidden; }
+.rail { height: 100%; min-height: 0; flex-shrink: 0; overflow-y: auto; }
+.main {
+  display: flex; flex-direction: column;
+  flex: 1 1 0; height: 100%; min-height: 0; max-height: 100%;
+  overflow: hidden !important;
+  padding: clamp(12px, 1.7vh, 24px) clamp(14px, 2.4vw, 40px) clamp(10px, 1.5vh, 18px);
+}
+.topline { flex: 0 0 auto; margin-bottom: clamp(6px, 1vh, 12px); padding-bottom: clamp(8px, 1.2vh, 13px); }
+h1 { margin-top: 6px; font-size: clamp(25px, 2.4vw, 36px); }
+.toolbar { flex: 0 0 auto; margin-bottom: 10px; padding: 8px 10px; }
+#momentumView, #volumeRatioView, #changeView, #sectorFlow { flex: 1 1 auto; min-height: 0; }
+#momentumView:not(.view-hidden) { display: flex; flex-direction: column; }
+.summary-grid { flex: 0 0 auto; gap: 12px; margin-bottom: 12px; }
+.summary-card { min-height: 85px; padding: 12px 16px 10px; }
+.summary-value { font-size: clamp(23px, 2.1vw, 29px); margin: 5px 0 2px; }
+.content-grid { display: grid; grid-template-rows: minmax(0, 1fr); flex: 1 1 0; min-height: 0; overflow: hidden; }
+.content-grid > .leaders-side,
+#volumeRatioView .volume-ratio-panel,
+#changeView .change-panel {
+  height: 100% !important; min-height: 0 !important; max-height: 100% !important;
+  overflow: hidden !important;
+  display: flex; flex-direction: column;
+}
+#volumeRatioView:not(.view-hidden), #changeView:not(.view-hidden) { display: flex; flex-direction: column; }
+#volumeRatioView .panel-head, #changeView .panel-head { flex: 0 0 auto; padding: 12px 16px 10px; }
+#volumeRatioView .panel-caption, #changeView .panel-caption { margin-top: 3px; }
+.leaders-side .leaders-grid,
+#volumeRatioView .leaders-grid,
+#changeView .leaders-grid {
+  display: grid;
+  flex: 1 1 0; height: 100%; min-height: 0 !important; max-height: 100%;
+  grid-template-rows: minmax(0, 1fr) !important;
+  grid-auto-rows: minmax(0, 1fr) !important;
+  padding-bottom: 9px;
+  overflow: hidden;
+}
+.leaders-side .leader-column,
+#volumeRatioView .leader-column,
+#changeView .leader-column {
+  display: flex; flex-direction: column;
+  min-height: 0 !important; max-height: 100% !important;
+  height: 100% !important;
+  flex: 1 1 0; overflow: hidden;
+  padding-top: 8px;
+}
+.leaders-side .leader-column-head,
+#volumeRatioView .leader-column-head,
+#changeView .leader-column-head { flex: 0 0 auto; min-height: 38px; padding-bottom: 6px; }
+.leaders-side .leader-list,
+#volumeRatioView .leader-list,
+#changeView .leader-list {
+  min-height: 0 !important; max-height: none !important;
+  height: auto !important; flex: 1 1 0 !important;
+  overflow-y: auto !important;
+  overscroll-behavior-y: contain;
+  scrollbar-width: thin !important;
+}
+.footer-note { flex: 0 0 auto; margin-top: 6px; font-size: 9px; line-height: 1.2; }
+/* Other radar mode: sector flow rows scroll inside the fixed workspace. */
+#sectorFlow:not(.view-hidden) { display: flex; flex-direction: column; overflow: hidden; }
+#sectorFlow .flow-head { flex: 0 0 auto; padding: 12px 16px 9px; }
+#sectorFlow .flow-list { flex: 1 1 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+#sectorFlow .flow-bar-zone { flex-basis: clamp(120px, 36vh, 350px); height: clamp(120px, 36vh, 350px); }
+/* Keep login access form reachable even on short screens. */
+.leaders-side .access-cta,
+#volumeRatioView .access-cta,
+#changeView .access-cta {
+  top: 50% !important;
+  max-height: calc(100% - 16px);
+  overflow-y: auto;
+}
+@media (max-height: 850px) and (min-width: 761px) {
+  .main { padding-top: 9px; padding-bottom: 8px; }
+  .topline { padding: 2px 0 7px; margin-bottom: 7px; }
+  h1 { margin-top: 3px; font-size: clamp(24px, 2.4vw, 30px); }
+  .top-actions { gap: 5px; }
+  .toolbar { padding: 6px 9px; margin-bottom: 7px; }
+  .summary-grid { margin-bottom: 8px; }
+  .summary-card { min-height: 75px; padding: 10px 14px 8px; }
+  .summary-foot { font-size: 9px; }
+  .leader-column-head h3 { letter-spacing: .06em; }
+  .footer-note { margin-top: 4px; }
+}
+@media (max-width: 760px) {
+  /* Mobile: single fixed screen, compact top navigation, with two
+     independently scrollable stock lists stacked below the summary strip. */
+  .app { display: flex; flex-direction: column; }
+  .rail {
+    position: relative; top: auto; display: flex; flex-direction: row; align-items: center;
+    flex: 0 0 60px; width: 100%; height: 60px !important; max-height: 60px;
+    padding: 5px 8px; overflow: hidden; gap: 8px;
+  }
+  .rail::after { display: none; }
+  .brand { padding: 0; gap: 6px; flex: 0 0 auto; }
+  .brand-mark { width: 29px; height: 29px; border-radius: 9px; font-size: 11px; }
+  .brand-name { font-size: 12px; white-space: nowrap; }
+  .brand-subtitle, .rail-label, .rail-note, .rail-spacer, .profile { display: none; }
+  .nav { display: flex; flex: 1 1 auto; width: auto; min-width: 0; gap: 4px; overflow-x: auto; overflow-y: hidden; }
+  .nav button { flex: 0 0 auto; width: auto; min-height: 34px; padding: 5px 8px; gap: 3px; }
+  .nav-icon { width: 18px; height: 18px; flex-basis: 18px; font-size: 13px; }
+  .nav-title { font-size: 10px; }
+  .nav-subtitle { display: none; }
+  .main { flex: 1 1 0; width: 100%; height: auto; max-height: none; padding: 6px 9px 8px; }
+  .topline { flex-direction: row; align-items: center; gap: 8px; margin-bottom: 6px; padding: 0 0 5px; }
+  .topline > div:first-child { flex: 1 1 auto; min-width: 0; padding: 0; }
+  .eyebrow { letter-spacing: .04em; font-size: 8px; gap: 5px; }
+  .topline h1 { font-size: 20px; margin-top: 3px; }
+  .topline h1::after { display: none; }
+  .top-actions { width: auto; max-width: 54%; flex: 0 1 auto; gap: 4px; justify-content: flex-end; }
+  .top-actions .nifty-regime-card { display: none; }
+  .top-actions .ticks-chip { display: none; }
+  .top-actions .action { min-height: 26px; padding: 2px 5px; font-size: 9px; }
+  .top-actions .feed-chip { min-height: 26px; padding: 4px 6px; font-size: 9px; }
+  .toolbar {
+    display: flex; flex: 0 0 45px; flex-flow: row nowrap; align-items: center;
+    height: 45px; min-height: 45px; max-height: 45px;
+    overflow-x: auto; overflow-y: hidden;
+    gap: 6px; margin-bottom: 6px; padding: 4px 6px;
+    overscroll-behavior-x: contain;
+  }
+  .toolbar > * { flex: 0 0 auto; }
+  .toolbar .segmented { flex: 0 0 auto; }
+  .toolbar .segmented button { padding: 5px 7px; font-size: 9px; }
+  .toolbar .select-wrap select { height: 28px; min-width: 105px; font-size: 10px; }
+  .toolbar .search { height: 28px; margin-left: 0; }
+  .toolbar .search input { width: 85px; }
+  .toolbar .mode-note { display: none; }
+  .summary-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; margin-bottom: 6px; }
+  .summary-card { min-width: 0; min-height: 62px; padding: 8px 6px 5px; border-radius: 10px; }
+  .summary-card::before { left: 7px; width: 16px; }
+  .summary-label { font-size: 7px; line-height: 1.15; letter-spacing: 0; }
+  .summary-value { font-size: 18px; margin: 4px 0 1px; }
+  .summary-foot { font-size: 7px; line-height: 1.1; }
+  .content-grid { min-height: 0; }
+  .leaders-side .leaders-grid,
+  #volumeRatioView .leaders-grid,
+  #changeView .leaders-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: repeat(2, minmax(0, 1fr)) !important;
+    grid-auto-rows: minmax(0, 1fr) !important;
+    padding: 0 6px 5px;
+    gap: 3px;
+  }
+  .leaders-side .leader-column,
+  #volumeRatioView .leader-column,
+  #changeView .leader-column { padding: 0 3px; margin: 0; border: 0; }
+  .leaders-side .leader-column + .leader-column,
+  #volumeRatioView .leader-column + .leader-column,
+  #changeView .leader-column + .leader-column { margin: 0; padding: 0 3px; border-left: 0; border-top: 1px solid var(--line); }
+  .leaders-side .leader-column-head,
+  #volumeRatioView .leader-column-head,
+  #changeView .leader-column-head { min-height: 27px; padding: 3px 1px; }
+  .leaders-side .leader-column-head h3,
+  #volumeRatioView .leader-column-head h3,
+  #changeView .leader-column-head h3 { font-size: 9px; }
+  .leader-average { font-size: 7px !important; padding: 3px 5px !important; }
+  .leader-table thead tr { height: 28px !important; }
+  .leader-table tbody tr { height: 41px !important; }
+  .leader-table th { padding: 4px 6px; }
+  .leader-table td { padding: 4px 6px; }
+  #volumeRatioView .panel-head, #changeView .panel-head { padding: 8px 10px 6px; }
+  .panel-title { font-size: 15px; }
+  #volumeRatioView .panel-caption, #changeView .panel-caption { display: none; }
+  .footer-note { margin-top: 3px; font-size: 8px; line-height: 1.1; }
+  .access-cta { padding: 10px 12px; gap: 5px; width: min(320px, calc(100% - 20px)); }
+  #sectorFlow .flow-head { padding: 8px 10px; }
+  #sectorFlow .flow-sort { flex-wrap: wrap; gap: 3px; }
+}
