@@ -9,7 +9,9 @@ LAYER = (ROOT / 'black-label.css').read_text(encoding='utf-8')
 
 def test_black_label_is_embedded_and_source_remains_editable():
     assert 'TREND HUNTER — BLACK LABEL' in LAYER
-    assert CSS.endswith(LAYER)
+    assert LAYER in CSS
+    # The Black Label base is followed by optional presentation-only layers.
+    assert CSS.index(LAYER) < CSS.index('TREND HUNTER · BLACK LABEL · PRIVATE ACCESS CTA LUXE')
     assert '<style id="pulse-spectra-premium">\n' + CSS.rstrip() + '\n</style>' in HTML
 
 

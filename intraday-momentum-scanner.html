@@ -5797,6 +5797,195 @@ body.theme-dark .leaders-side .leader-table tbody tr:not(.leader-placeholder-row
 @media (prefers-reduced-motion: reduce) {
   .topline .action, .summary-card, .leader-table td { transition: none !important; }
 }
+
+/* =======================================================================
+   TREND HUNTER · BLACK LABEL · PRIVATE ACCESS CTA LUXE
+   Scoped to member-only panels. No auth/URL/functionality changes.
+   ======================================================================= */
+
+.member-gated .gate-divider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  width: 100%;
+  margin: 5px 0 1px;
+  color: #b4bddd;
+  font: 700 10px/1.3 'Inter', system-ui, sans-serif;
+  letter-spacing: .025em;
+  white-space: nowrap;
+}
+.member-gated .gate-divider::before,
+.member-gated .gate-divider::after {
+  content: "";
+  height: 1px;
+  flex: 1 1 0;
+  min-width: 10px;
+  background: linear-gradient(90deg, transparent, rgba(151,164,219,.52));
+}
+.member-gated .gate-divider::after {
+  background: linear-gradient(90deg, rgba(151,164,219,.52), transparent);
+}
+.member-gated .gate-divider span { opacity: .9; }
+
+.member-gated .gate-join-link {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-height: 53px;
+  margin: 2px 0 0;
+  padding: 9px 10px 9px 14px;
+  overflow: hidden;
+  border: 1px solid rgba(169,157,255,.46);
+  border-radius: 15px;
+  background:
+    radial-gradient(ellipse at 0% 0%, rgba(151,137,255,.20), transparent 55%),
+    linear-gradient(111deg, rgba(49,48,92,.90), rgba(29,39,69,.94) 62%, rgba(25,52,72,.86));
+  color: #f0ecff;
+  text-align: left;
+  text-decoration: none;
+  font: 780 12px/1.25 'Plus Jakarta Sans', 'Inter', system-ui, sans-serif;
+  letter-spacing: -.015em;
+  box-shadow:
+    0 12px 28px rgba(11,13,37,.30),
+    0 0 0 1px rgba(177,164,255,.05),
+    inset 0 1px 0 rgba(255,255,255,.18),
+    inset 0 -1px 0 rgba(132,133,226,.11);
+  transition: transform .2s ease, background .2s ease, border-color .2s ease, box-shadow .2s ease;
+}
+/* Fine metallic edge; it doesn't obscure text or intercept clicks. */
+.member-gated .gate-join-link::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  left: 0;
+  top: 13px;
+  bottom: 13px;
+  width: 3px;
+  border-radius: 0 8px 8px 0;
+  background: linear-gradient(180deg, #b0a0ff, #75e2dc);
+  box-shadow: 0 0 14px rgba(156,144,255,.55);
+}
+.member-gated .gate-join-link::after {
+  content: "";
+  display: block;
+  position: absolute;
+  z-index: -1;
+  pointer-events: none;
+  top: -90%;
+  bottom: -90%;
+  left: -47%;
+  width: 24%;
+  height: auto;
+  transform: rotate(22deg);
+  background: linear-gradient(90deg, transparent, rgba(229,225,255,.18), transparent);
+  transition: left .65s ease;
+}
+.member-gated .gate-join-link span:first-child {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: 9px;
+  white-space: normal;
+}
+.member-gated .gate-join-link span:first-child::before {
+  content: "✦";
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 23px;
+  height: 23px;
+  border: 1px solid rgba(165,154,255,.3);
+  border-radius: 8px;
+  background: rgba(164,146,255,.13);
+  color: #c8c0ff;
+  font-size: 13px;
+  font-weight: 800;
+}
+.member-gated .gate-join-link span:last-child {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 31px;
+  width: 31px;
+  height: 31px;
+  border: 1px solid rgba(199,187,255,.31);
+  border-radius: 10px;
+  background: linear-gradient(140deg, rgba(176,161,255,.28), rgba(93,124,219,.20));
+  color: #e8e5ff;
+  font: 700 18px/1 'Inter', system-ui, sans-serif;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.15);
+  transition: transform .2s ease, background .2s ease;
+}
+.member-gated .gate-join-link:hover {
+  transform: translateY(-2px);
+  filter: none;
+  border-color: rgba(190,179,255,.78);
+  background:
+    radial-gradient(ellipse at 0% 0%, rgba(160,143,255,.28), transparent 59%),
+    linear-gradient(110deg, rgba(61,60,114,.94), rgba(37,50,87,.97) 63%, rgba(31,65,88,.91));
+  box-shadow: 0 17px 35px rgba(7,11,33,.40), 0 0 18px rgba(129,115,255,.12), inset 0 1px 0 rgba(255,255,255,.2);
+}
+.member-gated .gate-join-link:hover::after { left: 120%; }
+.member-gated .gate-join-link:hover span:last-child { transform: translate(2px,-2px); background: rgba(164,151,255,.30); }
+.member-gated .gate-join-link:active { transform: translateY(0); }
+.member-gated .gate-join-link:focus-visible {
+  outline: 2px solid #9ff9df;
+  outline-offset: 3px;
+}
+
+.member-gated .gate-footnote {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  margin: 3px 0 0;
+  color: #96a6ca;
+  font: 530 10px/1.45 'Inter', system-ui, sans-serif;
+  letter-spacing: .005em;
+  text-align: center;
+}
+.member-gated .gate-footnote::before {
+  content: "✓";
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 17px;
+  width: 17px;
+  height: 17px;
+  border: 1px solid rgba(103,231,193,.3);
+  border-radius: 50%;
+  background: rgba(57,195,151,.09);
+  color: #82e9cb;
+  font-size: 10px;
+  font-weight: 800;
+}
+@media (max-width: 760px) {
+  .member-gated .gate-divider { gap: 8px; margin-top: 2px; font-size: 9px; }
+  .member-gated .gate-join-link { min-height: 46px; padding: 7px 9px 7px 10px; border-radius: 12px; font-size: 11px; }
+  .member-gated .gate-join-link span:first-child { gap: 7px; }
+  .member-gated .gate-join-link span:first-child::before { width: 20px; height: 20px; border-radius: 7px; font-size: 11px; }
+  .member-gated .gate-join-link span:last-child { flex-basis: 28px; width: 28px; height: 28px; border-radius: 9px; }
+  .member-gated .gate-footnote { display: flex; font-size: 9px; line-height: 1.3; }
+}
+@media (max-height: 640px) {
+  .member-gated .gate-join-link { min-height: 40px; padding-block: 5px; }
+  .member-gated .gate-footnote { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .member-gated .gate-join-link,
+  .member-gated .gate-join-link::after,
+  .member-gated .gate-join-link span:last-child { transition: none !important; }
+  .member-gated .gate-join-link:hover { transform: none !important; }
+}
+/* Keep the complete CTA and trust line visible inside desktop-sized gates. */
+@media (min-width: 761px) {
+  .member-gated > .premium-access-gate { gap: 7px; }
+}
 </style>
 
 </head>
@@ -5833,7 +6022,7 @@ body.theme-dark .leaders-side .leader-table tbody tr:not(.leader-placeholder-row
 
 <div class="eyebrow" id="feedStatus"><span class="live-dot"></span><span id="feedStatusText">Trend Hunter / NSE universe · waiting</span></div>
 
-<h1 id="pageTitle">Trend Hunter</h1>
+<h1 id="pageTitle">Intraday Trend Hunter</h1>
 
 <p class="subhead" id="pageSubhead" hidden></p>
 

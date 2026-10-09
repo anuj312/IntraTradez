@@ -947,6 +947,40 @@ def _start_history_seed(force: bool = False) -> None:
     threading.Thread(target=run, name="history-seed", daemon=True).start()
 
 
+def _kite_history_datetime(value: Any) -> datetime:
+    """Return a native Python datetime in IST for the Kite historical API.
+
+    IMPORTANT: pykiteconnect checks ``type(x) == datetime.datetime`` rather
+    than ``isinstance(x, datetime)``. A pandas Timestamp is passed through
+    unformatted, including its ``+05:30`` timezone suffix, which Kite rejects
+    with ``InputException: invalid from date``. Strip the timezone after
+    converting to IST so Kite receives YYYY-MM-DD HH:MM:SS every time.
+    """
+    stamp = pd.Timestamp(value)
+    if pd.isna(stamp):
+        raise ValueError("Historical recovery date is missing")
+    stamp = stamp.tz_localize(IST) if stamp.tzinfo is None else stamp.tz_convert(IST)
+    return stamp.to_pydatetime().replace(tzinfo=None)
+
+
+def _completed_history_cutoff(now: datetime) -> datetime:
+    """Last possible *completed* NSE 5m boundary, respecting opening/close.
+
+    The market calendar is not consulted; NSE holidays simply return no new
+    candles. Weekends and pre-09:20 requests use the previous weekday close.
+    """
+    now_ist = now.replace(tzinfo=IST) if now.tzinfo is None else now.astimezone(IST)
+    candidate = now_ist
+    if candidate.weekday() >= 5 or candidate.time() < dtime(9, 20):
+        candidate = candidate - timedelta(days=1)
+        while candidate.weekday() >= 5:
+            candidate -= timedelta(days=1)
+        return candidate.replace(hour=15, minute=30, second=0, microsecond=0)
+    if candidate.time() >= dtime(15, 30):
+        return candidate.replace(hour=15, minute=30, second=0, microsecond=0)
+    return candidate.replace(minute=candidate.minute - candidate.minute % 5, second=0, microsecond=0)
+
+
 def _recover_history(symbol: str, token: int, now: datetime, daily: bool = False) -> None:
     if kite is None:
         return
@@ -954,32 +988,52 @@ def _recover_history(symbol: str, token: int, now: datetime, daily: bool = False
         existing = HISTORY.get(token, {})
         older = existing.get("intraday")
         daily_frame = existing.get("regular")
-    # One request per stale symbol, not a full multi-week seed per market day.
-    end_of_completed = now.replace(second=0, microsecond=0)
-    end_of_completed -= timedelta(minutes=end_of_completed.minute % 5)
+
+    end_of_completed = _completed_history_cutoff(now)
     if older is not None and not older.empty:
-        start_time = older.iloc[-1]["date"] - timedelta(minutes=5)
+        latest = _kite_history_datetime(older.iloc[-1]["date"])
+        # Completed last candle already covers the available session. Avoid
+        # refetching the same 5m bars on each startup after market close.
+        need_intraday = latest + timedelta(minutes=5) < _kite_history_datetime(end_of_completed)
+        start_time = latest - timedelta(minutes=5)
     else:
-        start_time = now - timedelta(days=SEED_DAYS_5M)
-    if (now - start_time).days > 59:
-        start_time = now - timedelta(days=59)
-    if start_time < end_of_completed:
-        rows = kite.historical_data(token, start_time, end_of_completed, "5minute", continuous=False, oi=False)
+        need_intraday = True
+        start_time = _kite_history_datetime(now) - timedelta(days=SEED_DAYS_5M)
+    start_time = max(start_time, _kite_history_datetime(end_of_completed) - timedelta(days=59))
+
+    if need_intraday and start_time < _kite_history_datetime(end_of_completed):
+        # Kite must receive native datetime, not pandas Timestamp.
+        rows = kite.historical_data(
+            token, _kite_history_datetime(start_time), _kite_history_datetime(end_of_completed),
+            "5minute", continuous=False, oi=False,
+        )
         additional = _normalize_history(rows)
         if not additional.empty:
-            additional = additional[additional["date"] + pd.Timedelta(minutes=5) <= end_of_completed]
+            boundary = pd.Timestamp(end_of_completed)
+            additional = additional[additional["date"] + pd.Timedelta(minutes=5) <= boundary]
             with DATA_LOCK:
                 frame = HISTORY.setdefault(token, {}).get("intraday")
                 HISTORY[token]["intraday"] = merge_finished(frame, additional.to_dict("records"))
     time.sleep(HISTORY_SLEEP_SEC)
+
     if daily:
-        beginning = daily_frame.iloc[-1]["date"] - timedelta(days=2) if daily_frame is not None and not daily_frame.empty else now - timedelta(days=SEED_DAYS_DAILY)
-        rows = kite.historical_data(token, beginning, now, "day", continuous=False, oi=False)
-        additional = _normalize_history(rows)
-        if not additional.empty:
-            with DATA_LOCK:
-                history = HISTORY.setdefault(token, {})
-                history["regular"] = merge_finished(history.get("regular"), additional.to_dict("records"), max_rows=180)
+        if daily_frame is not None and not daily_frame.empty:
+            beginning = _kite_history_datetime(daily_frame.iloc[-1]["date"]) - timedelta(days=2)
+        else:
+            beginning = _kite_history_datetime(now) - timedelta(days=SEED_DAYS_DAILY)
+        end_daily = _kite_history_datetime(now)
+        if beginning < end_daily:
+            rows = kite.historical_data(
+                token, _kite_history_datetime(beginning), end_daily, "day",
+                continuous=False, oi=False,
+            )
+            additional = _normalize_history(rows)
+            if not additional.empty:
+                with DATA_LOCK:
+                    history = HISTORY.setdefault(token, {})
+                    history["regular"] = merge_finished(
+                        history.get("regular"), additional.to_dict("records"), max_rows=180,
+                    )
         time.sleep(HISTORY_SLEEP_SEC)
 
 
@@ -1005,7 +1059,10 @@ def _start_gap_recovery(daily: bool = False) -> None:
                         _recover_history(symbol, token, datetime.now(IST), daily)
                 except Exception:
                     errors += 1
-                    log.exception("Gap-recovery failed for %s", symbol)
+                    if errors <= 3:
+                        log.exception("Gap-recovery failed for %s", symbol)
+                    else:
+                        log.debug("Further gap-recovery error for %s", symbol, exc_info=True)
             if errors == 0:
                 HISTORY_SEED_DATE = now.date()
                 HISTORY_CACHE_LOADED = True
