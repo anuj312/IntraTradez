@@ -1,3 +1,8 @@
+## Trend Hunter — clean live subheading and scores (2026-10-09)
+- Removed `~` prefix from provisional scores in all momentum leaderboards while retaining hover context and unchanged calculations.
+- Live status now reads `Live / N detailed / M watched` with actual server counts; removed candle timestamp, price strength, provisional text and last-tick timestamp from the live subheading.
+- No auth, market feed, candle logic or backend changes.
+
 ## Trend Hunter — removed Live Signal Intelligence panel (2026-10-08)
 - Removed the entire Live Signal Intelligence panel, leader chips, Replay Date/Symbol fields, Replay 5m button, Futures OI button and results area.
 - Deleted panel-only browser event handlers, rendering logic and styling. No hidden placeholders remain; the summary cards move directly beneath the filters.

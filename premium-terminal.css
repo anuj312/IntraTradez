@@ -423,3 +423,79 @@ h1::after { content: "PRO"; display: inline-flex; vertical-align: middle; transf
   #volumeRatioView .leader-column-head,
   #changeView .leader-column-head { min-height: 48px; }
 }
+
+
+/* Trend Hunter — sector stock momentum chips (visual-only enhancement). */
+.sector-stock-name { min-width: 0; }
+.sector-stock-dot { flex-shrink: 0; }
+.sector-stock-info { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.sector-stock-label { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sector-state-badge {
+  --state-ink: #56647e;
+  --state-border: rgba(115,128,161,.22);
+  --state-bg: linear-gradient(135deg,rgba(235,239,247,.96),rgba(246,248,252,.94));
+  --state-glow: rgba(115,128,161,.16);
+  flex: 0 0 auto;
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  min-height: 23px; max-width: 123px; padding: 3px 8px 3px 6px;
+  box-sizing: border-box; border: 1px solid var(--state-border); border-radius: 999px;
+  background: var(--state-bg); color: var(--state-ink);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.50), 0 2px 7px var(--state-glow);
+  font-family: var(--font,system-ui,sans-serif);
+  font-size: 9px; font-weight: 800; line-height: 1.12; letter-spacing: .025em;
+  white-space: nowrap; vertical-align: middle;
+  transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease;
+}
+.sector-stock-row:hover .sector-state-badge { transform: translateY(-1px); box-shadow: inset 0 1px 0 rgba(255,255,255,.5), 0 4px 12px var(--state-glow); }
+.sector-state-icon {
+  display: inline-grid; place-items: center;
+  width: 15px; height: 15px; flex: 0 0 15px;
+  border-radius: 50%; background: var(--state-glow);
+  font-size: 12px; font-weight: 950; line-height: 1;
+}
+.sector-state--accelerating {
+  --state-ink: #087d5a;
+  --state-border: rgba(14,161,112,.29);
+  --state-bg: linear-gradient(120deg,#d7fae9,#ebfff4);
+  --state-glow: rgba(8,173,116,.17);
+}
+.sector-state--steady {
+  --state-ink: #5361b7;
+  --state-border: rgba(106,117,220,.26);
+  --state-bg: linear-gradient(120deg,#e8eaff,#f3f5ff);
+  --state-glow: rgba(95,108,216,.14);
+}
+.sector-state--fading {
+  --state-ink: #ac621c;
+  --state-border: rgba(216,144,57,.28);
+  --state-bg: linear-gradient(120deg,#fff0d4,#fff8e9);
+  --state-glow: rgba(214,133,33,.15);
+}
+.sector-state--stale {
+  --state-ink: #bf4456;
+  --state-border: rgba(207,91,106,.27);
+  --state-bg: linear-gradient(120deg,#ffe5e8,#fff4f4);
+  --state-glow: rgba(216,93,105,.13);
+}
+.sector-state--waiting {
+  --state-ink: #738198;
+  --state-border: rgba(133,148,166,.23);
+  --state-bg: linear-gradient(120deg,#edf0f5,#f7f8fa);
+  --state-glow: rgba(122,133,157,.10);
+}
+body.theme-dark .sector-state-badge { box-shadow: inset 0 1px 0 rgba(255,255,255,.075), 0 3px 10px rgba(0,0,0,.16); }
+body.theme-dark .sector-state--accelerating { --state-ink: #8cf4bc; --state-border: rgba(72,209,138,.32); --state-bg: linear-gradient(120deg,#163e32,#173027); --state-glow: rgba(42,196,127,.23); }
+body.theme-dark .sector-state--steady { --state-ink: #b9bfff; --state-border: rgba(145,148,246,.30); --state-bg: linear-gradient(120deg,#26284f,#222943); --state-glow: rgba(139,143,250,.22); }
+body.theme-dark .sector-state--fading { --state-ink: #ffd18b; --state-border: rgba(244,170,82,.28); --state-bg: linear-gradient(120deg,#48301e,#3c2b22); --state-glow: rgba(221,142,57,.22); }
+body.theme-dark .sector-state--stale { --state-ink: #ffabb3; --state-border: rgba(232,114,133,.28); --state-bg: linear-gradient(120deg,#49262f,#39242d); --state-glow: rgba(230,104,134,.20); }
+body.theme-dark .sector-state--waiting { --state-ink: #a9b4c7; --state-border: rgba(160,172,193,.18); --state-bg: linear-gradient(120deg,#28313f,#242c3b); --state-glow: rgba(120,134,166,.18); }
+@media (max-width: 600px) {
+  .sector-stock-info { flex-direction: column; align-items: flex-start; gap: 3px; }
+  .sector-stock-row { min-height: 53px; }
+  .sector-state-badge { min-height: 19px; padding: 2px 6px 2px 4px; gap: 4px; font-size: 8px; }
+  .sector-state-icon { width: 13px; height: 13px; flex-basis: 13px; font-size: 10px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sector-state-badge { transition: none; }
+  .sector-stock-row:hover .sector-state-badge { transform: none; }
+}

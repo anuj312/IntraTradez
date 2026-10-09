@@ -95,5 +95,10 @@ def test_startup_and_html_quote_first_paths_exist():
     assert body.index("_start_ticker()") < body.index("_start_history_seed(force=False)")
     assert '"invalid_token"' in server and "kite.profile()" in server
     assert 'scanTimer = setInterval(() => { if (!document.hidden) loadLiveData(false); }, 3000);' in html
-    assert 'const confirmation = completed5m ?' in html
+    assert 'Live / ${state.detailSymbols} detailed / ${state.universeSize} watched' in html
+    assert 'const confirmation = completed5m ?' not in html
+    assert 'current score provisional /' not in html
+    assert 'last tick ${' not in html
+    assert '${provisional ? "~" : ""}' not in html
+    assert '${scoreMultiplier(row.score)}</span>' in html
     assert 'function hasVolumeRatio(row)' in html
