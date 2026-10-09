@@ -16,7 +16,9 @@ def test_all_leaderboard_slices_share_ten_stock_limit():
         assert re.search(r'id="' + control + r'">0 / 10</span>', HTML)
 
 def test_six_row_viewport_and_scroll_retained():
-    assert 'max-height: calc(40px + 6 * var(--th-stock-row-height))' in CSS
+    assert 'container-type: size' in CSS
+    assert 'calc((100cqh - var(--th-stock-header-height)) / 6)' in CSS
+    assert 'max-height: none !important' in CSS
     assert 'overflow-y: auto !important' in CSS
     for element in ['gainersList','losersList','volumeLeadersList','volumeDeclinesList','changeLeadersList','changeDeclinesList']:
         assert re.search('id="' + element + r'"[^>]+scroll for positions 7 to 10', HTML)

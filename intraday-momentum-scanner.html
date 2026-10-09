@@ -3119,9 +3119,8 @@ h1::after { content: "PRO"; display: inline-flex; vertical-align: middle; transf
 @media (prefers-reduced-motion: reduce) {
   .topline,.toolbar,.summary-card { animation: none !important; }
 }
-/* TREND HUNTER · six-row viewport with internal scrolling up to 10 stocks.
-   The viewport includes one 40px column-header row and exactly seven
-   65px data rows. Both sides remain the same height regardless of result count. */
+/* TREND HUNTER · balanced leaderboard columns, with ten stocks available
+   via internal scrolling and six visible rows filling the available panel. */
 .content-grid > .leaders-side,
 #volumeRatioView .volume-ratio-panel,
 #changeView .change-panel {
@@ -3511,18 +3510,20 @@ h1 { margin-top: 6px; font-size: clamp(25px, 2.4vw, 36px); }
 }
 
 
-/* TREND HUNTER | SIX-STOCK TABLE WINDOWS + FULL-HEIGHT SECTOR FLOW
-   Display only six stocks at a time on standard desktop screens, retaining
-   up to 10 real rows and independent scroll for every leaderboard.
-   Very short/mobile screens gracefully show fewer rows instead of scrolling
-   the outer document or clipping the bottom half of the dashboard. */
-:root { --th-stock-row-height: clamp(42px, calc((100dvh - 420px) / 6), 65px); }
+/* TREND HUNTER | SIX VISIBLE STOCKS, TEN TOTAL, NO EMPTY BOTTOM GAP
+   Fill the ENTIRE available leaderboard height using six equally sized rows.
+   Scrolling within the list reveals entries seven through ten; the outer page
+   never scrolls. Container query units automatically adapt to screen size.
+   For small stacked panels, preserve readable 40px minimum rows and scroll. */
+:root { --th-stock-row-min: 40px; --th-stock-header-height: 40px; }
 .leaders-side .leader-list,
 #volumeRatioView .leader-list,
 #changeView .leader-list {
-  max-height: calc(40px + 6 * var(--th-stock-row-height)) !important;
-  flex: 0 1 auto !important;
+  flex: 1 1 0 !important;
+  height: auto !important;
   min-height: 0 !important;
+  max-height: none !important;
+  container-type: size;
   overflow-y: auto !important;
   overscroll-behavior-y: contain;
   scrollbar-width: thin !important;
@@ -3530,7 +3531,9 @@ h1 { margin-top: 6px; font-size: clamp(25px, 2.4vw, 36px); }
 .leaders-side .leader-table tbody tr,
 #volumeRatioView .leader-table tbody tr,
 #changeView .leader-table tbody tr {
-  height: var(--th-stock-row-height) !important;
+  /* Fallback for browsers without container query units. */
+  height: 65px !important;
+  height: max(var(--th-stock-row-min), calc((100cqh - var(--th-stock-header-height)) / 6)) !important;
 }
 
 /* Make each sector plot use all height between the panel head and its labels.
@@ -3569,7 +3572,6 @@ h1 { margin-top: 6px; font-size: clamp(25px, 2.4vw, 36px); }
 #sectorFlow .flow-name-metric { flex: 0 0 auto; }
 #sectorFlow .flow-fill { min-height: 5px; max-height: 98%; }
 @media (max-width: 760px) {
-  :root { --th-stock-row-height: 41px; }
   #sectorFlow .flow-list { padding: 10px 5px 14px; gap: 2px; }
   #sectorFlow .flow-row { height: 100%; min-height: 0; }
   #sectorFlow .flow-bar-zone { flex: 1 1 0; height: auto; min-height: 0; margin: 0; }
@@ -3577,7 +3579,6 @@ h1 { margin-top: 6px; font-size: clamp(25px, 2.4vw, 36px); }
   #sectorFlow .flow-fill { width: min(10px, 72%); min-width: 3px; }
 }
 @media (max-height: 700px) and (min-width: 761px) {
-  :root { --th-stock-row-height: clamp(36px, calc((100dvh - 390px) / 6), 52px); }
   #sectorFlow .flow-list { padding-top: 8px; padding-bottom: 10px; }
 }
 @media (min-width: 761px) and (max-height: 760px) {
@@ -3593,15 +3594,9 @@ h1 { margin-top: 6px; font-size: clamp(25px, 2.4vw, 36px); }
 }
 /* On a full-height phone six compact rows also fit inside each stacked panel. */
 @media (max-width: 760px) and (min-height: 800px) {
-  :root { --th-stock-row-height: 38px; }
 }
 @media (max-width: 760px) {
-  /* Mobile table headings are 28px, not the desktop 40px. */
-  .leaders-side .leader-list,
-  #volumeRatioView .leader-list,
-  #changeView .leader-list {
-    max-height: calc(28px + 6 * var(--th-stock-row-height)) !important;
-  }
+  :root { --th-stock-header-height: 28px; --th-stock-row-min: 41px; }
 }
 </style>
 

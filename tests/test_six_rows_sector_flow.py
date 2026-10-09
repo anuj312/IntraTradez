@@ -4,11 +4,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CSS = (ROOT / "premium-terminal.css").read_text(encoding="utf-8")
 HTML = (ROOT / "intraday-momentum-scanner.html").read_text(encoding="utf-8")
-CUSTOM = CSS.split("/* TREND HUNTER | SIX-STOCK TABLE WINDOWS", 1)[1]
+CUSTOM = CSS.split("/* TREND HUNTER | SIX VISIBLE STOCKS, TEN TOTAL, NO EMPTY BOTTOM GAP", 1)[1]
 
 
 def test_six_rows_then_scroll_each_leaderboard():
-    assert "max-height: calc(40px + 6 * var(--th-stock-row-height))" in CUSTOM
+    assert "container-type: size" in CUSTOM
+    assert "max-height: none !important" in CUSTOM
+    assert "calc((100cqh - var(--th-stock-header-height)) / 6)" in CUSTOM
+    assert "flex: 1 1 0 !important" in CUSTOM
     for selector in (".leaders-side .leader-list", "#volumeRatioView .leader-list", "#changeView .leader-list"):
         assert selector in CUSTOM
     assert "overflow-y: auto !important" in CUSTOM
