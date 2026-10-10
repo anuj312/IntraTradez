@@ -1,0 +1,61 @@
+/* Google + Razorpay lifetime access. Scoped to membership mode only. */
+.membership-google .premium-access-gate .access-gate-form,
+.membership-google .premium-access-gate .gate-divider,
+.membership-google .premium-access-gate .gate-join-link,
+.membership-google .premium-access-gate .gate-footnote,
+.membership-google .premium-access-gate .access-error { display: none !important; }
+.membership-google .premium-access-gate { gap: 6px !important; max-width: 400px !important; width: min(400px, calc(100% - 24px)) !important; }
+.membership-google .premium-access-gate .gate-description { max-width: 310px; }
+.google-membership-card { display: flex; flex-direction: column; gap: 9px; width: 100%; align-items: center; margin-top: 3px; }
+.google-plan-kicker { color:#9a95e2; font: 850 9px/1.1 var(--font-data,monospace); letter-spacing:.18em; }
+.google-plan-title { color:#f8faff; font:750 clamp(20px,2vw,26px)/1.1 var(--font-display,sans-serif); letter-spacing:-.05em; text-align:center; }
+.google-plan-price { font: 850 clamp(34px,3.5vw,42px)/1 var(--font-display,sans-serif); letter-spacing:-.075em; background:linear-gradient(105deg,#fff 12%,#a0fae1 64%,#ada4ff);background-clip:text;-webkit-background-clip:text;color:transparent; }
+.google-plan-price span { font-size:.64em; margin-right:2px; vertical-align:8%; }
+.google-plan-bits { display:flex; flex-wrap:wrap; justify-content:center; gap:5px 11px; color:#a3bad1; font-size:10px; font-weight:700; }
+.google-plan-bits span:first-letter { color:#68e4b9; }
+.google-identity { width:100%;margin:3px 0 0;color:#95a9c7;text-align:center;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
+.google-signin,.google-buy { width:100%;min-height:42px;display:flex;align-items:center;justify-content:center;gap:12px;cursor:pointer;border-radius:13px; padding:7px 13px;font:800 12px var(--font,sans-serif);transition:transform .16s,box-shadow .16s; }
+.google-signin { color:#14253d;background:linear-gradient(120deg,#fff,#e4eaff);border:1px solid rgba(255,255,255,.8);box-shadow:0 7px 24px rgba(139,153,234,.18); }
+.google-g { display:grid;place-items:center;width:24px;height:24px;background:white;border-radius:50%;font-weight:950;color:#4285f4;box-shadow:0 2px 9px rgba(0,0,0,.11); }
+.google-signin>span:last-child,.google-buy>span:last-child {margin-left:auto;font-size:17px;}
+.google-buy {color:#092b25;background:linear-gradient(125deg,#9ff8d5,#52e5b4 58%,#a5e7eb);border:1px solid #b8ffdf;box-shadow:0 9px 30px rgba(33,220,148,.22);}
+.google-signin:hover,.google-buy:hover {transform:translateY(-1px);}
+.google-signin:focus-visible,.google-buy:focus-visible {outline:3px solid #a5a4ff;outline-offset:3px;}
+.google-buy:disabled {opacity:.5;cursor:wait;}
+.google-notice { margin:0;color:#fbb9c6;text-align:center;font-size:10px;line-height:1.3; }
+.google-plan-footer {font-size:9px;color:#7c91ae;text-align:center;letter-spacing:.04em;}
+.google-membership-card [hidden] {display:none!important;}
+body.membership-google.google-signed-in .top-actions .access-logout {display:inline-flex!important;}
+@media (max-width:760px) {
+ .membership-google .premium-access-gate {width:min(336px,calc(100% - 16px))!important;padding:12px 12px!important;gap:5px!important;}
+ .google-membership-card{gap:5px;}
+ .google-plan-kicker {font-size:8px;}
+ .google-plan-title{font-size:20px;}
+ .google-plan-price{font-size:31px;}
+ .google-plan-bits{font-size:9px;gap:4px 8px;}
+ .google-signin,.google-buy{min-height:36px;font-size:11px;}
+ .google-identity{font-size:9px;}
+ .google-plan-footer{font-size:8px;}
+}
+@media (max-height:680px) { .membership-google .premium-access-gate .gate-emblem {display:none!important;} .membership-google .premium-access-gate {padding-block:8px!important;} .google-membership-card{gap:4px;} }
+
+.google-signout { border:0;background:transparent;color:#9ba7d4;cursor:pointer;font:700 10px var(--font,sans-serif);padding:1px 6px;text-decoration:underline;text-underline-offset:3px; }
+.google-signout:hover {color:#d9e4ff;}
+.google-signout[hidden] {display:none!important;}
+body.membership-google.google-signed-in .top-actions .access-logout {display:inline-flex!important;}
+@media (max-width:390px) { body.membership-google.google-signed-in .top-actions .access-logout {display:none!important;} }
+
+/* Google-only mode hides any paid-membership decorations while preserving
+   the same Black Label sign-in card and secure Supabase session UX. */
+.membership-google-free .google-plan-price,.membership-google-free .google-buy { display:none !important; }
+.membership-google-free .google-plan-title {font-size:clamp(20px,2.2vw,28px);}
+.membership-google-free .google-plan-bits {margin:4px 0;}
+.membership-google-free .google-plan-footer {color:#8eafaf;}
+
+/* Black Label — Razorpay SANDBOX: unmistakable test-payment state. */
+.membership-google-test .google-test-banner {display:inline-flex;align-items:center;justify-content:center;gap:5px;padding:6px 11px;border:1px solid rgba(251,191,99,.45);border-radius:999px;background:linear-gradient(125deg,rgba(103,63,23,.44),rgba(68,44,55,.45));color:#ffdfa9;font:850 9px/1.2 var(--font-data,monospace);letter-spacing:.11em;box-shadow:0 3px 16px rgba(255,173,57,.1)}
+.membership-google-test .google-plan-price {background:linear-gradient(100deg,#ffe5ba,#aef9e2,#d0b9ff);background-clip:text;-webkit-background-clip:text;color:transparent}
+.membership-google-test .google-buy {background:linear-gradient(120deg,#ffe2a6,#ffbc82 60%,#e7bbf9);border:1px solid #f4d1a5;color:#2c2235;box-shadow:0 12px 30px rgba(242,167,81,.18)}
+.membership-google-test .google-plan-footer {color:#e0b88a;font-weight:700;letter-spacing:.01em}
+.membership-google-test .google-test-banner + .google-plan-title {margin-top:1px}
+@media (max-width:760px){.membership-google-test .google-test-banner{font-size:8px;padding:5px 8px}.membership-google-test .google-plan-price{font-size:29px}}

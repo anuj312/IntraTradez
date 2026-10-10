@@ -49,9 +49,11 @@ def test_backend_restricts_scan_stock_candles_replay_and_futures():
     for fn in module.body:
         if isinstance(fn,ast.FunctionDef) and fn.name in names:
             source=ast.get_source_segment(BACKEND,fn)
-            assert 'access_session_is_active(phone, session_id)' in source
+            assert '_request_is_authorized()' in source
             assert '"access_required"' in source
             names.remove(fn.name)
     assert not names
+    assert 'access_session_is_active(phone, session_id)' in BACKEND
+    assert 'membership.has_paid_access(membership.bearer_token())' in BACKEND
     assert 'numbers.txt' in BACKEND
     assert '/api/access/request-otp' not in BACKEND

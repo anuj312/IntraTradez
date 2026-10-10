@@ -38,6 +38,8 @@ from kiteconnect import KiteConnect, KiteTicker
 from kiteconnect.exceptions import TokenException
 
 from sector_definitions import ALL_SYMBOLS, SECTOR_DEFINITIONS
+import member_payments as membership
+
 from scanner_features import FiveMinuteBuilder, market_bucket, merge_finished, cumulative_slot_ratio, one_way_metrics, breakout_signals, replay_session
 
 
@@ -2027,6 +2029,8 @@ def index():
 
 @app.post("/api/access/login")
 def access_login():
+    if membership.enabled():
+        return jsonify({"error": "google_membership_required"}), 403
     ensure_live_started()
     payload = request.get_json(silent=True) or {}
     phone = normalize_access_number(payload.get("phone"))
@@ -2053,6 +2057,8 @@ def access_login():
 
 @app.post("/api/access/logout")
 def access_logout():
+    if membership.enabled():
+        return jsonify({"error": "google_membership_required"}), 403
     ensure_live_started()
     payload = request.get_json(silent=True) or {}
     phone = normalize_access_number(payload.get("phone"))
@@ -2081,7 +2087,7 @@ def health():
             "last_tick": datetime.fromtimestamp(LAST_TICK_TS, IST).isoformat() if LAST_TICK_TS else None,
             "cache_ready": bool(SCAN_CACHE_UPDATED_AT),
             "futures_enabled": ENABLE_FUTURES_OI,
-            "authentication": "numbers_txt_allowlist",
+            "authentication": ("google_login_only" if membership.free_mode() else "google_razorpay_test" if membership.test_mode() else "google_paid_membership") if membership.enabled() else "numbers_txt_allowlist",
             "cache_updated_at": datetime.fromtimestamp(SCAN_CACHE_UPDATED_AT, IST).isoformat() if SCAN_CACHE_UPDATED_AT else None,
             "history_cache_loaded": HISTORY_CACHE_LOADED,
             "invalid_kite_token": INVALID_KITE_TOKEN,
@@ -2091,14 +2097,90 @@ def health():
     )
 
 
+# Google authentication is opt-in via MEMBERSHIP_AUTH_MODE=google_free (login only)
+# or google_test (simulated payments), or google (live, explicitly allowed). Phone sessions never bypass.
+def _request_is_authorized() -> bool:
+    if membership.enabled():
+        try:
+            return membership.has_paid_access(membership.bearer_token())
+        except membership.MembershipError:
+            return False
+    phone = normalize_access_number(request.args.get("access_phone"))
+    session_id = clean_env(request.args.get("access_session_id", ""))
+    return access_session_is_active(phone, session_id)
+
+
+@app.get("/api/membership/config")
+def membership_config():
+    response = jsonify(membership.config_payload())
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+@app.get("/api/membership/me")
+def membership_me():
+    if not membership.enabled():
+        return jsonify({'error': 'membership_mode_disabled'}), 404
+    try:
+        user, profile = membership.member_status(membership.bearer_token())
+        response = jsonify({'user': user, 'membership': {
+            'status': profile['status'] if profile else 'pending',
+            'paid_at': profile.get('paid_at') if profile else None,
+        }})
+        response.headers['Cache-Control'] = 'no-store'
+        return response
+    except membership.MembershipError as error:
+        return jsonify({'error': error.code}), error.status
+
+
+# Compatible Standard Checkout endpoint names; both reuse the membership flow.
+@app.post("/api/create-order")
+@app.post("/api/membership/order")
+def membership_order():
+    if not membership.paid_mode():
+        return jsonify({'error': 'membership_mode_disabled'}), 404
+    try:
+        user = membership.get_google_user(membership.bearer_token())
+        payload = request.get_json(silent=True)
+        membership.validate_order_request(payload if payload is not None else {})
+        response = jsonify(membership.create_order(user))
+        response.headers['Cache-Control'] = 'no-store'
+        return response
+    except membership.MembershipError as error:
+        return jsonify({'error': error.code}), error.status
+
+
+@app.post("/api/verify-payment")
+@app.post("/api/membership/verify")
+def membership_verify():
+    if not membership.paid_mode():
+        return jsonify({'error': 'membership_mode_disabled'}), 404
+    try:
+        user = membership.get_google_user(membership.bearer_token())
+        response = jsonify(membership.verify_checkout(user, request.get_json(silent=True)))
+        response.headers['Cache-Control'] = 'no-store'
+        return response
+    except membership.MembershipError as error:
+        return jsonify({'error': error.code}), error.status
+
+
+@app.post("/api/membership/webhook")
+def membership_webhook():
+    if not membership.paid_mode():
+        return jsonify({'error': 'membership_mode_disabled'}), 404
+    try:
+        result = membership.handle_webhook(request.get_data(), request.headers.get('X-Razorpay-Signature', ''))
+        return jsonify(result)
+    except membership.MembershipError as error:
+        return jsonify({'error': error.code}), error.status
+
+
 @app.get("/api/scan")
 def scan():
     ensure_live_started()
 
     # Auth (required)
-    phone = normalize_access_number(request.args.get("access_phone"))
-    session_id = clean_env(request.args.get("access_session_id", ""))
-    if not access_session_is_active(phone, session_id):
+    if not _request_is_authorized():
         return jsonify({"error": "access_required"}), 403
 
     timeframe = request.args.get("type", "intraday").lower()
@@ -2163,9 +2245,7 @@ def scan():
 
 @app.get("/api/stock/<symbol>/candles")
 def stock_candles(symbol: str):
-    phone = normalize_access_number(request.args.get("access_phone"))
-    session_id = clean_env(request.args.get("access_session_id", ""))
-    if not access_session_is_active(phone, session_id):
+    if not _request_is_authorized():
         return jsonify({"error": "access_required"}), 403
     token = SYMBOL_TO_TOKEN.get(symbol.upper())
     if not token:
@@ -2189,9 +2269,7 @@ def stock_candles(symbol: str):
 
 @app.get("/api/replay")
 def replay():
-    phone = normalize_access_number(request.args.get("access_phone"))
-    session_id = clean_env(request.args.get("access_session_id", ""))
-    if not access_session_is_active(phone, session_id):
+    if not _request_is_authorized():
         return jsonify({"error": "access_required"}), 403
     try:
         day = date.fromisoformat(request.args.get("date", ""))
@@ -2212,9 +2290,7 @@ def replay():
 
 @app.get("/api/futures")
 def futures():
-    phone = normalize_access_number(request.args.get("access_phone"))
-    session_id = clean_env(request.args.get("access_session_id", ""))
-    if not access_session_is_active(phone, session_id):
+    if not _request_is_authorized():
         return jsonify({"error": "access_required"}), 403
     with DATA_LOCK:
         quotes = dict(FUTURES_QUOTES)

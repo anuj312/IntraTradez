@@ -25,7 +25,7 @@ def _load_routes():
     tree = ast.parse((ROOT / "live_scanner_server.py").read_text())
     names = {
         "normalize_access_number", "_prune_sessions", "access_session_is_active",
-        "access_login", "access_logout", "scan", "stock_candles", "replay", "futures"
+        "access_login", "access_logout", "_request_is_authorized", "scan", "stock_candles", "replay", "futures"
     }
     functions = [node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in names]
     assert {fn.name for fn in functions} == names
@@ -42,6 +42,7 @@ def _load_routes():
         "allowed_access_numbers": lambda: {"9000000000"},
         "ensure_live_started": lambda: None,
         "request": SimpleNamespace(args={}, headers={}, get_json=lambda silent=False: {}),
+        "membership": SimpleNamespace(enabled=lambda: False),
     }
     exec(compile(ast.fix_missing_locations(module), "<isolated backend routes>", "exec"), env)
     return env

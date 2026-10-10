@@ -6158,6 +6158,67 @@ body.theme-dark .leaders-side .leader-table tbody tr:not(.leader-placeholder-row
   #volumeRatioView .leader-chip,
   #changeView .leader-chip { flex-basis: 25px !important; width: 25px !important; height: 25px !important; }
 }
+/* Google + Razorpay lifetime access. Scoped to membership mode only. */
+.membership-google .premium-access-gate .access-gate-form,
+.membership-google .premium-access-gate .gate-divider,
+.membership-google .premium-access-gate .gate-join-link,
+.membership-google .premium-access-gate .gate-footnote,
+.membership-google .premium-access-gate .access-error { display: none !important; }
+.membership-google .premium-access-gate { gap: 6px !important; max-width: 400px !important; width: min(400px, calc(100% - 24px)) !important; }
+.membership-google .premium-access-gate .gate-description { max-width: 310px; }
+.google-membership-card { display: flex; flex-direction: column; gap: 9px; width: 100%; align-items: center; margin-top: 3px; }
+.google-plan-kicker { color:#9a95e2; font: 850 9px/1.1 var(--font-data,monospace); letter-spacing:.18em; }
+.google-plan-title { color:#f8faff; font:750 clamp(20px,2vw,26px)/1.1 var(--font-display,sans-serif); letter-spacing:-.05em; text-align:center; }
+.google-plan-price { font: 850 clamp(34px,3.5vw,42px)/1 var(--font-display,sans-serif); letter-spacing:-.075em; background:linear-gradient(105deg,#fff 12%,#a0fae1 64%,#ada4ff);background-clip:text;-webkit-background-clip:text;color:transparent; }
+.google-plan-price span { font-size:.64em; margin-right:2px; vertical-align:8%; }
+.google-plan-bits { display:flex; flex-wrap:wrap; justify-content:center; gap:5px 11px; color:#a3bad1; font-size:10px; font-weight:700; }
+.google-plan-bits span:first-letter { color:#68e4b9; }
+.google-identity { width:100%;margin:3px 0 0;color:#95a9c7;text-align:center;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
+.google-signin,.google-buy { width:100%;min-height:42px;display:flex;align-items:center;justify-content:center;gap:12px;cursor:pointer;border-radius:13px; padding:7px 13px;font:800 12px var(--font,sans-serif);transition:transform .16s,box-shadow .16s; }
+.google-signin { color:#14253d;background:linear-gradient(120deg,#fff,#e4eaff);border:1px solid rgba(255,255,255,.8);box-shadow:0 7px 24px rgba(139,153,234,.18); }
+.google-g { display:grid;place-items:center;width:24px;height:24px;background:white;border-radius:50%;font-weight:950;color:#4285f4;box-shadow:0 2px 9px rgba(0,0,0,.11); }
+.google-signin>span:last-child,.google-buy>span:last-child {margin-left:auto;font-size:17px;}
+.google-buy {color:#092b25;background:linear-gradient(125deg,#9ff8d5,#52e5b4 58%,#a5e7eb);border:1px solid #b8ffdf;box-shadow:0 9px 30px rgba(33,220,148,.22);}
+.google-signin:hover,.google-buy:hover {transform:translateY(-1px);}
+.google-signin:focus-visible,.google-buy:focus-visible {outline:3px solid #a5a4ff;outline-offset:3px;}
+.google-buy:disabled {opacity:.5;cursor:wait;}
+.google-notice { margin:0;color:#fbb9c6;text-align:center;font-size:10px;line-height:1.3; }
+.google-plan-footer {font-size:9px;color:#7c91ae;text-align:center;letter-spacing:.04em;}
+.google-membership-card [hidden] {display:none!important;}
+body.membership-google.google-signed-in .top-actions .access-logout {display:inline-flex!important;}
+@media (max-width:760px) {
+ .membership-google .premium-access-gate {width:min(336px,calc(100% - 16px))!important;padding:12px 12px!important;gap:5px!important;}
+ .google-membership-card{gap:5px;}
+ .google-plan-kicker {font-size:8px;}
+ .google-plan-title{font-size:20px;}
+ .google-plan-price{font-size:31px;}
+ .google-plan-bits{font-size:9px;gap:4px 8px;}
+ .google-signin,.google-buy{min-height:36px;font-size:11px;}
+ .google-identity{font-size:9px;}
+ .google-plan-footer{font-size:8px;}
+}
+@media (max-height:680px) { .membership-google .premium-access-gate .gate-emblem {display:none!important;} .membership-google .premium-access-gate {padding-block:8px!important;} .google-membership-card{gap:4px;} }
+
+.google-signout { border:0;background:transparent;color:#9ba7d4;cursor:pointer;font:700 10px var(--font,sans-serif);padding:1px 6px;text-decoration:underline;text-underline-offset:3px; }
+.google-signout:hover {color:#d9e4ff;}
+.google-signout[hidden] {display:none!important;}
+body.membership-google.google-signed-in .top-actions .access-logout {display:inline-flex!important;}
+@media (max-width:390px) { body.membership-google.google-signed-in .top-actions .access-logout {display:none!important;} }
+
+/* Google-only mode hides any paid-membership decorations while preserving
+   the same Black Label sign-in card and secure Supabase session UX. */
+.membership-google-free .google-plan-price,.membership-google-free .google-buy { display:none !important; }
+.membership-google-free .google-plan-title {font-size:clamp(20px,2.2vw,28px);}
+.membership-google-free .google-plan-bits {margin:4px 0;}
+.membership-google-free .google-plan-footer {color:#8eafaf;}
+
+/* Black Label — Razorpay SANDBOX: unmistakable test-payment state. */
+.membership-google-test .google-test-banner {display:inline-flex;align-items:center;justify-content:center;gap:5px;padding:6px 11px;border:1px solid rgba(251,191,99,.45);border-radius:999px;background:linear-gradient(125deg,rgba(103,63,23,.44),rgba(68,44,55,.45));color:#ffdfa9;font:850 9px/1.2 var(--font-data,monospace);letter-spacing:.11em;box-shadow:0 3px 16px rgba(255,173,57,.1)}
+.membership-google-test .google-plan-price {background:linear-gradient(100deg,#ffe5ba,#aef9e2,#d0b9ff);background-clip:text;-webkit-background-clip:text;color:transparent}
+.membership-google-test .google-buy {background:linear-gradient(120deg,#ffe2a6,#ffbc82 60%,#e7bbf9);border:1px solid #f4d1a5;color:#2c2235;box-shadow:0 12px 30px rgba(242,167,81,.18)}
+.membership-google-test .google-plan-footer {color:#e0b88a;font-weight:700;letter-spacing:.01em}
+.membership-google-test .google-test-banner + .google-plan-title {margin-top:1px}
+@media (max-width:760px){.membership-google-test .google-test-banner{font-size:8px;padding:5px 8px}.membership-google-test .google-plan-price{font-size:29px}}
 </style>
 
 </head>
@@ -6591,6 +6652,7 @@ body.theme-dark .leaders-side .leader-table tbody tr:not(.leader-placeholder-row
 
 </div>
 
+<script src="https://checkout.razorpay.com/v1/checkout.js" defer></script>
 <script>
 
 const SECTOR_DEFINITIONS = {
@@ -6888,6 +6950,14 @@ function stopScanPolling() {
 }
 
 async function initializeAccess() {
+  try {
+    const configResponse = await fetch('/api/membership/config', {cache:'no-store'});
+    const config = configResponse.ok ? await configResponse.json() : {mode:'phone'};
+    if (config.mode === 'google' || config.mode === 'google_free' || config.mode === 'google_test') {
+      await initializeGoogleMembership(config);
+      return;
+    }
+  } catch (error) { /* The original phone login remains available unless Google mode is explicitly enabled. */ }
   const forms = [...document.querySelectorAll(".access-gate-form")];
   const saved = normalizePhone(accessStorageGet("scannerAccessNumber"));
   if (saved) {
@@ -6932,8 +7002,9 @@ async function initializeAccess() {
   }));
 }
 
-// Use the original phone and session ID for the new authenticated chart/replay/OI endpoints.
+// Google membership mode uses bearer tokens, never untrusted phone query params.
 function accessUrl(path) {
+  if (googleMembershipMode) return path;
   const url = new URL(path, window.location.origin);
   url.searchParams.set("access_phone", state.accessNumber);
   url.searchParams.set("access_session_id", accessSessionId());
@@ -8157,7 +8228,7 @@ try {
 
 const generation = accessGeneration;
 const loginNumber = state.accessNumber;
-const response = await fetch(accessUrl(`/api/scan?${params.toString()}`), { cache: "no-cache" });
+const response = await fetch(accessUrl(`/api/scan?${params.toString()}`), { cache: "no-cache", headers: membershipHeaders() });
 if (!state.accessGranted || generation !== accessGeneration || loginNumber !== state.accessNumber) return;
 
 
@@ -8362,6 +8433,10 @@ if (state.accessGranted) loadLiveData(true);
 
 document.getElementById("logoutBtn").addEventListener("click", async () => {
 
+if (googleMembershipMode) {
+  await googleMemberSignOut();
+  return;
+}
 if (!state.accessGranted) return;
 
 try {
@@ -8478,6 +8553,260 @@ mobileFilterToggle.addEventListener('click', () => {
   mobileFilterToggle.setAttribute('aria-expanded', String(expanded));
   mobileFilterToggle.textContent = expanded ? '✕ Close' : '☷ Filters';
 });
+
+// Trend Hunter Google identity + one-time Razorpay lifetime membership.
+// No payment status is trusted from the browser; /verify checks capture server-side.
+let googleMembershipMode = false;
+let googleFreeMode = false;
+let googleTestMode = false;
+let googleMembershipConfig = null;
+let googleClient = null;
+let googleAccessToken = '';
+let googleCurrentUser = null;
+let googleRefreshBusy = false;
+let googleRefreshQueued = false;
+let googlePaymentBusy = false;
+let googleSessionVersion = 0;
+
+function membershipHeaders() {
+  return googleMembershipMode && googleAccessToken
+    ? {'Authorization': 'Bearer ' + googleAccessToken} : {};
+}
+
+function loadExternalScript(url) {
+  return new Promise((resolve, reject) => {
+    const tag = document.createElement('script');
+    tag.src = url; tag.async = true;
+    tag.onload = resolve;
+    tag.onerror = () => reject(new Error('Unable to load secure login or payment library'));
+    document.head.appendChild(tag);
+  });
+}
+
+async function membershipApi(path, {method = 'GET', body} = {}) {
+  const response = await fetch(path, {method, cache: 'no-store',
+    headers: {'Content-Type':'application/json', ...membershipHeaders()},
+    body: body === undefined ? undefined : JSON.stringify(body)});
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(data.error || 'Membership service unavailable');
+    error.status = response.status;
+    throw error;
+  }
+  return data;
+}
+
+function membershipMessage(error) {
+  const messages = {
+    membership_not_configured: 'Google login is not configured yet. Contact the site owner.',
+    membership_blocked: 'This membership has been blocked. Contact support.',
+    google_login_required: 'Please sign in again with Google.',
+    payment_not_captured: 'Payment has not been captured yet. We will check again shortly.',
+    already_member: 'Your lifetime access is already active.',
+    payment_order_not_owned: 'This payment belongs to another account.',
+    invalid_payment_signature: 'Payment could not be verified. No access has been granted.',
+    payment_not_configured: 'Razorpay Test Mode is not configured. Contact the site owner.',
+    invalid_amount: 'Invalid membership price. Please refresh and try again.',
+    invalid_payment_request: 'The payment response was invalid. No access was granted.',
+    missing_payment_fields: 'The payment response is incomplete. No access was granted.',
+    razorpay_api_error: 'Razorpay is temporarily unavailable. Please try again.'
+  };
+  return messages[error?.message] || 'Unable to complete the request. Please try again.';
+}
+
+function updateDeskIdentity(user, membershipStatus) {
+  const area = document.querySelector('.rail .profile');
+  if (!area) return;
+  const name = area.querySelector('.profile-copy');
+  const avatar = area.querySelector('.avatar');
+  const display = (user?.full_name || user?.email || 'Desk view').trim();
+  if (name) {
+    name.replaceChildren(document.createTextNode(display));
+    const small = document.createElement('small');
+    small.textContent = googleTestMode && user ? (membershipStatus === 'active' ? 'TEST MEMBER · DEMO ONLY' : 'GOOGLE TEST ACCESS') :
+                        googleFreeMode && user ? 'GOOGLE MEMBER' :
+                        membershipStatus === 'active' ? 'LIFETIME PRO MEMBER' :
+                        user ? (user.email || 'Membership pending') : 'Personal workspace';
+    name.appendChild(small);
+  }
+  if (avatar) {
+    const letters = display.split(/\s+/).map(word => word[0]).slice(0, 2).join('').toUpperCase();
+    avatar.textContent = letters || 'TH';
+  }
+}
+
+function showMembershipState(user, status = 'pending', errorText = '') {
+  googleCurrentUser = user;
+  document.body.classList.toggle('google-signed-in', !!user);
+  document.querySelectorAll('.google-membership-card').forEach(card => {
+    const signIn = card.querySelector('.google-signin');
+    const pay = card.querySelector('.google-buy');
+    const details = card.querySelector('.google-identity');
+    const msg = card.querySelector('.google-notice');
+    const head = card.querySelector('.google-plan-title');
+    const foot = card.querySelector('.google-plan-footer');
+    if (signIn) signIn.hidden = !!user;
+    if (pay) pay.hidden = googleFreeMode || !user || status === 'active';
+    const signOut = card.querySelector('.google-signout');
+    if (signOut) signOut.hidden = !user;
+    if (details) details.textContent = user ? `${user.full_name} · ${user.email}` : 'Secure sign in with your Google account';
+    if (head) head.textContent = googleFreeMode ? (user ? 'Google access enabled' : 'Continue with Google') :
+      googleTestMode && status === 'active' ? 'Test access enabled' :
+      googleTestMode ? 'Lifetime Access · Demo' :
+      user && status === 'active' ? 'Lifetime access active' : 'Lifetime Access';
+    if (foot) foot.textContent = googleTestMode ?
+      (status === 'active' ? 'Demo access only · Not a real purchase' : 'TEST MODE · Simulated checkout · No real charge') :
+      googleFreeMode ? 'Secure Google sign-in · No payment required' :
+      status === 'active' ? 'Your access is permanent while your account remains in good standing.' :
+      'One-time payment · No recurring subscription';
+    if (msg) { msg.textContent = errorText; msg.hidden = !errorText; }
+  });
+  updateDeskIdentity(user, status);
+}
+
+function addGoogleMembershipGates() {
+  document.body.classList.add('membership-google');
+  document.body.classList.toggle('membership-google-free', googleFreeMode);
+  document.body.classList.toggle('membership-google-test', googleTestMode);
+  document.querySelectorAll('.premium-access-gate').forEach(gate => {
+    gate.querySelector('.gate-heading').textContent = googleFreeMode ? 'Access your trading desk' : 'Your edge starts here';
+    gate.querySelector('.gate-description').textContent = googleFreeMode ?
+      'Sign in securely with Google to access all four live scanners.' :
+      googleTestMode ? 'Sign in with Google, then simulate a ₹4,999 test checkout. No money is charged.' :
+      'Sign in with Google. Unlock all four live scanners with a one-time lifetime membership.';
+    const card = document.createElement('div');
+    card.className = 'google-membership-card';
+    card.innerHTML = `
+      <div class="google-plan-kicker">✦ TREND HUNTER BLACK LABEL</div>
+      ${googleTestMode ? '<div class="google-test-banner" role="status">TEST MODE · NO REAL CHARGE</div>' : ''}
+      <div class="google-plan-title">${googleFreeMode ? 'Continue with Google' : googleTestMode ? 'Lifetime Access · Demo' : 'Lifetime Access'}</div>
+      ${googleFreeMode ? '' : '<div class="google-plan-price"><span>₹</span>4,999</div>'}
+      <div class="google-plan-bits"><span>✓ All four radars</span><span>✓ Live market data</span><span>✓ Secure access</span></div>
+      <p class="google-identity">Secure sign in with your Google account</p>
+      <button class="google-signin" type="button"><span class="google-g" aria-hidden="true">G</span> Continue with Google <span>→</span></button>
+      ${googleFreeMode ? '' : `<button class="google-buy" type="button" hidden>${googleTestMode ? 'Try ₹4,999 Test Checkout' : 'Unlock Lifetime Access · ₹4,999'} <span>↗</span></button>`}
+      <button class="google-signout" type="button" hidden>Sign out / switch Google account</button>
+      <p class="google-notice" role="status" hidden></p>
+      <div class="google-plan-footer">${googleTestMode ? 'Simulated payment only · No real charge' : googleFreeMode ? 'Secure sign-in · No payment required' : 'One-time payment · No recurring subscription'}</div>`;
+    gate.insertBefore(card, gate.querySelector('.access-form'));
+    card.querySelector('.google-signin').addEventListener('click', async () => {
+      if (!googleClient) return showMembershipState(googleCurrentUser, 'pending', 'Google login is still loading.');
+      try {
+        const result = await googleClient.auth.signInWithOAuth({provider:'google', options:{redirectTo:window.location.origin + window.location.pathname}});
+        if (result.error) throw result.error;
+      } catch (error) { showMembershipState(null, 'pending', membershipMessage(error)); }
+    });
+    if (!googleFreeMode) card.querySelector('.google-buy').addEventListener('click', payForLifetimeMembership);
+    card.querySelector('.google-signout').addEventListener('click', googleMemberSignOut);
+  });
+}
+
+async function googleMemberSignOut() {
+  googleSessionVersion++;
+  googleAccessToken = '';
+  googleCurrentUser = null;
+  stopScanPolling(); setAccessGranted(false); showMembershipState(null);
+  if (googleClient) await googleClient.auth.signOut();
+  showToast('Signed out of Trend Hunter');
+}
+
+async function refreshGoogleMember() {
+  if (googleRefreshBusy) { googleRefreshQueued = true; return; }
+  if (!googleClient) return;
+  googleRefreshBusy = true;
+  const version = googleSessionVersion;
+  try {
+    const {data, error} = await googleClient.auth.getSession();
+    if (error) throw error;
+    googleAccessToken = data?.session?.access_token || '';
+    if (!googleAccessToken) {
+      stopScanPolling(); setAccessGranted(false);
+      showMembershipState(null);
+      return;
+    }
+    const details = await membershipApi('/api/membership/me');
+    if (version !== googleSessionVersion) return;
+    const status = details.membership?.status || 'pending';
+    showMembershipState(details.user, status);
+    if (googleFreeMode ? status !== 'blocked' : status === 'active') {
+      setAccessGranted(true);
+      startScanPolling();
+    } else {
+      stopScanPolling(); setAccessGranted(false);
+      if (status === 'blocked') showMembershipState(details.user, status, 'Access is blocked. Contact the site owner.');
+    }
+  } catch (error) {
+    if (version !== googleSessionVersion) return;
+    stopScanPolling(); setAccessGranted(false);
+    showMembershipState(googleCurrentUser, 'pending', membershipMessage(error));
+  } finally {
+    googleRefreshBusy = false;
+    if (googleRefreshQueued) { googleRefreshQueued = false; setTimeout(refreshGoogleMember, 0); }
+  }
+}
+
+async function payForLifetimeMembership() {
+  if (!googleCurrentUser || !googleAccessToken || googlePaymentBusy) return;
+  googlePaymentBusy = true;
+  document.querySelectorAll('.google-buy').forEach(button => button.disabled = true);
+  try {
+    if (googleTestMode !== true && googleMembershipConfig?.mode !== 'google') throw new Error('payment_not_configured');
+    const order = await membershipApi('/api/create-order', {method:'POST', body:{amount:499900, currency:'INR'}});
+    if (googleTestMode && (!order.test_mode || !String(order.key || '').startsWith('rzp_test_'))) throw new Error('payment_not_configured');
+    if (!window.Razorpay) await loadExternalScript('https://checkout.razorpay.com/v1/checkout.js');
+    const checkout = new window.Razorpay({
+      key: order.key, amount: order.amount, currency: order.currency,
+      name:'Trend Hunter', description:googleTestMode ? 'TEST PAYMENT ONLY · ₹4,999 Demo' : 'Lifetime Access · Black Label PRO',
+      image: undefined, order_id: order.order_id,
+      prefill: {name: order.name, email: order.email},
+      theme: {color:'#7beac5'},
+      handler: async result => {
+        try {
+          await membershipApi('/api/verify-payment', {method:'POST', body:result});
+          await refreshGoogleMember();
+          showToast(googleTestMode ? 'Test access enabled — no real payment' : 'Lifetime membership activated');
+        } catch (error) {
+          await refreshGoogleMember();
+          showToast(membershipMessage(error));
+        }
+      },
+      modal: {ondismiss: () => showToast('Checkout closed — no membership change')}
+    });
+    checkout.on('payment.failed', (response) => {
+      const reason = response?.error?.description || 'The test payment was unsuccessful.';
+      showToast(reason + ' No membership was activated.');
+    });
+    checkout.open();
+  } catch (error) {
+    showMembershipState(googleCurrentUser, 'pending', membershipMessage(error));
+    showToast(membershipMessage(error));
+  } finally {
+    googlePaymentBusy = false;
+    document.querySelectorAll('.google-buy').forEach(button => button.disabled = false);
+  }
+}
+
+async function initializeGoogleMembership(config) {
+  googleMembershipMode = true;
+  googleFreeMode = config.mode === 'google_free';
+  googleTestMode = config.mode === 'google_test';
+  googleMembershipConfig = config;
+  addGoogleMembershipGates();
+  showMembershipState(null);
+  if (!config.configured) {
+    showMembershipState(null, 'pending', 'Membership setup is pending. Please contact the owner.');
+    return;
+  }
+  try {
+    if (!window.supabase) await loadExternalScript('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js');
+    googleClient = window.supabase.createClient(config.supabase_url, config.supabase_anon_key);
+    googleClient.auth.onAuthStateChange(() => {
+      googleSessionVersion++;
+      setTimeout(() => { refreshGoogleMember(); }, 0);
+    });
+    await refreshGoogleMember();
+  } catch (error) { showMembershipState(null, 'pending', membershipMessage(error)); }
+}
 
 // Boot
 

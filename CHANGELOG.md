@@ -1,3 +1,12 @@
+## Google + Razorpay TEST Mode — ₹4,999 simulated membership
+
+- Added opt-in `MEMBERSHIP_AUTH_MODE=google_test` Google login + Razorpay sandbox checkout.
+- Only `rzp_test_` keys are accepted; live charging is disabled unless explicitly opted in with separate production credentials and mode.
+- Sandbox purchases are verified server-side then saved in isolated `th_test_memberships` and `th_test_payment_orders` tables. They do not create real lifetime memberships.
+- Added Black Label `TEST MODE · NO REAL CHARGE` banner and `TEST MEMBER · DEMO ONLY` profile status.
+- Preserved the scanner, member access gates, responsive mobile layout and existing `google_free` / phone modes.
+- Setup files: `RAZORPAY_TEST_MODE_SETUP.md`, `SUPABASE_RAZORPAY_TEST_SETUP.sql`.
+
 ## Trend Hunter — clean live subheading and scores (2026-10-09)
 - Removed `~` prefix from provisional scores in all momentum leaderboards while retaining hover context and unchanged calculations.
 - Live status now reads `Live / N detailed / M watched` with actual server counts; removed candle timestamp, price strength, provisional text and last-tick timestamp from the live subheading.
