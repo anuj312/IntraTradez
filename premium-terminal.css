@@ -3173,3 +3173,175 @@ body.theme-dark .leaders-side .leader-table tbody tr:not(.leader-placeholder-row
 @media (min-width: 761px) {
   .member-gated > .premium-access-gate { gap: 7px; }
 }
+/* Trend Hunter: mobile Volume Ratio / % Change switch and table alignment.
+   Appended after Black Label styles to override earlier ID-specific display
+   rules that accidentally left both grid columns visible on phones. */
+@media (max-width: 760px) {
+  /* The selected side is the ONLY active grid participant. Both side panels
+     otherwise occupy grid row 2 and visually overlap one another. */
+  #volumeRatioView .leaders-grid[data-mobile-side-active="gainers"] > .leader-column.losers,
+  #changeView .leaders-grid[data-mobile-side-active="gainers"] > .leader-column.losers,
+  #volumeRatioView .leaders-grid[data-mobile-side-active="losers"] > .leader-column.gainers,
+  #changeView .leaders-grid[data-mobile-side-active="losers"] > .leader-column.gainers {
+    display: none !important;
+  }
+  #volumeRatioView .leaders-grid[data-mobile-side-active="gainers"] > .leader-column.gainers,
+  #changeView .leaders-grid[data-mobile-side-active="gainers"] > .leader-column.gainers,
+  #volumeRatioView .leaders-grid[data-mobile-side-active="losers"] > .leader-column.losers,
+  #changeView .leaders-grid[data-mobile-side-active="losers"] > .leader-column.losers {
+    display: flex !important;
+    grid-column: 1 !important;
+    grid-row: 2 !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    box-sizing: border-box;
+  }
+  #volumeRatioView .leaders-grid,
+  #changeView .leaders-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  #volumeRatioView .mobile-leader-switch,
+  #changeView .mobile-leader-switch {
+    width: 100%; min-width: 0; box-sizing: border-box;
+  }
+  #volumeRatioView .mobile-leader-switch button,
+  #changeView .mobile-leader-switch button {
+    min-width: 0; white-space: nowrap; font-size: 12px !important;
+    font-weight: 800; letter-spacing: -.015em;
+  }
+  #volumeRatioView .leader-column-head,
+  #changeView .leader-column-head {
+    display: flex !important; align-items: center !important;
+    width: 100%; min-width: 0; gap: 7px !important;
+    padding: 5px 4px 8px !important;
+    box-sizing: border-box;
+  }
+  #volumeRatioView .leader-column-head .leader-dot,
+  #changeView .leader-column-head .leader-dot {
+    flex: 0 0 8px; width: 8px; height: 8px;
+  }
+  #volumeRatioView .leader-column-head h3,
+  #changeView .leader-column-head h3 {
+    display: block; flex: 1 1 auto; min-width: 0;
+    margin: 0; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap !important;
+    font-size: 10px !important; letter-spacing: .025em !important;
+  }
+  #volumeRatioView .leader-column-head > span[id$="Count"],
+  #changeView .leader-column-head > span[id$="Count"] {
+    flex: 0 0 auto; margin-left: auto; white-space: nowrap;
+    font-size: 10px; font-variant-numeric: tabular-nums;
+  }
+  #volumeRatioView .leader-list,
+  #changeView .leader-list {
+    display: block !important;
+    width: 100%; min-width: 0 !important;
+    box-sizing: border-box; padding: 0 2px 0 0 !important;
+    overflow-x: hidden !important;
+  }
+  #volumeRatioView .leader-table,
+  #changeView .leader-table {
+    width: 100% !important; min-width: 0 !important;
+    table-layout: fixed !important;
+    border-collapse: separate; border-spacing: 0 5px !important;
+    font-variant-numeric: tabular-nums;
+  }
+  /* Tables use separate column templates: three columns vs four. */
+  #volumeRatioView .volume-ratio-table col:nth-child(1) { width: 49% !important; }
+  #volumeRatioView .volume-ratio-table col:nth-child(2) { width: 27% !important; }
+  #volumeRatioView .volume-ratio-table col:nth-child(3) { width: 24% !important; }
+  #changeView .score-table col:nth-child(1) { width: 43% !important; }
+  #changeView .score-table col:nth-child(2) { width: 20% !important; }
+  #changeView .score-table col:nth-child(3) { width: 17% !important; }
+  #changeView .score-table col:nth-child(4) { width: 20% !important; }
+  #volumeRatioView .leader-table th,
+  #changeView .leader-table th {
+    padding: 5px 5px !important;
+    overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+    vertical-align: middle;
+    font-size: 9px !important; letter-spacing: -.015em !important;
+  }
+  /* Short mobile labels avoid truncated headings while the original table
+     text remains accessible to assistive technology. */
+  #changeView .score-table th:nth-child(2),
+  #changeView .score-table th:nth-child(3),
+  #changeView .score-table th:nth-child(4) { font-size: 0 !important; }
+  #changeView .score-table th:nth-child(2)::after { content: "CHG %"; }
+  #changeView .score-table th:nth-child(3)::after { content: "SCORE"; }
+  #changeView .score-table th:nth-child(4)::after { content: "VOL X"; }
+  #changeView .score-table th:nth-child(2)::after,
+  #changeView .score-table th:nth-child(3)::after,
+  #changeView .score-table th:nth-child(4)::after {
+    display: inline; font-size: 9px; font-weight: 800;
+    letter-spacing: 0; white-space: nowrap;
+  }
+  #volumeRatioView .leader-table td,
+  #changeView .leader-table td {
+    min-width: 0; max-width: 0;
+    padding: 7px 5px !important;
+    vertical-align: middle; overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 10.5px !important;
+    white-space: nowrap;
+  }
+  #volumeRatioView .leader-table td:not(:first-child),
+  #changeView .leader-table td:not(:first-child) {
+    text-align: right !important;
+    font-family: var(--font-data, 'JetBrains Mono', monospace);
+    font-size: 10px !important;
+    letter-spacing: -.035em;
+  }
+  #volumeRatioView .leader-table th:not(:first-child),
+  #changeView .leader-table th:not(:first-child) { text-align: right !important; }
+  #volumeRatioView .leader-table td:first-child,
+  #changeView .leader-table td:first-child { text-align: left !important; }
+  #volumeRatioView .leader-stock,
+  #changeView .leader-stock { display: flex; align-items: center; gap: 5px !important; min-width: 0 !important; max-width: 100%; overflow: hidden; }
+  #volumeRatioView .leader-copy,
+  #changeView .leader-copy { flex: 1 1 0; width: 0; min-width: 0 !important; overflow: hidden; }
+  #volumeRatioView .leader-name,
+  #changeView .leader-name {
+    display: block; width: 100%; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap !important;
+    font-size: 11px !important; letter-spacing: -.02em;
+  }
+  #volumeRatioView .leader-sector,
+  #changeView .leader-sector {
+    display: block; min-width: 0; width: 100%;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 8px !important;
+  }
+  #volumeRatioView .leader-chip,
+  #changeView .leader-chip { flex: 0 0 28px !important; width: 28px !important; height: 28px !important; font-size: 9px !important; }
+  #volumeRatioView .leader-ratio,
+  #changeView .leader-ratio { font-size: 10px !important; }
+}
+/* On compact phones, give all four navigation tabs room without truncating the
+   selected module. Full titles remain available to assistive tech via aria-label. */
+@media (max-width: 480px) {
+  .rail .brand-copy { display: none !important; }
+  .rail .brand { flex: 0 0 auto !important; width: auto !important; min-width: 0 !important; padding: 0 3px !important; }
+  .rail .brand-mark { flex: 0 0 34px !important; width: 34px !important; height: 34px !important; padding: 6px !important; }
+  .rail .nav { flex: 1 1 0 !important; min-width: 0 !important; gap: 3px !important; justify-content: space-between; padding: 0 !important; }
+  .rail .nav button { flex: 1 1 auto !important; min-width: 0 !important; width: auto !important; height: 35px !important; min-height: 35px !important; padding: 5px 4px !important; gap: 3px !important; justify-content: center; }
+  .rail .nav button .nav-icon { flex: 0 0 13px !important; width: 13px !important; height: 16px !important; }
+  .rail .nav button .nav-icon svg { width: 13px !important; height: 13px !important; }
+  .rail .nav button .nav-copy { flex: 0 1 auto; min-width: 0; }
+  .rail .nav button .nav-title { display: block; font-size: 0 !important; white-space: nowrap; }
+  .rail .nav button .nav-title::after { font-size: 9px; font-weight: 800; letter-spacing: -.035em; }
+  .rail .nav button:nth-child(1) .nav-title::after { content: "Momentum"; }
+  .rail .nav button:nth-child(2) .nav-title::after { content: "Sector"; }
+  .rail .nav button:nth-child(3) .nav-title::after { content: "Volume"; }
+  .rail .nav button:nth-child(4) .nav-title::after { content: "% Change"; }
+}
+@media (max-width: 360px) {
+  .rail .nav button .nav-title::after { font-size: 8px; }
+  #volumeRatioView .leader-column-head h3,
+  #changeView .leader-column-head h3 { font-size: 9px !important; }
+  #volumeRatioView .leader-table th,
+  #changeView .leader-table th { font-size: 8px !important; padding: 5px 3px !important; }
+  #volumeRatioView .leader-table td,
+  #changeView .leader-table td { padding: 6px 3px !important; }
+  #volumeRatioView .leader-chip,
+  #changeView .leader-chip { flex-basis: 25px !important; width: 25px !important; height: 25px !important; }
+}
