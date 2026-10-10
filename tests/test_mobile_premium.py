@@ -21,7 +21,7 @@ def test_phone_table_filters_are_discoverable():
 def test_phone_keeps_table_scrolling_and_sector_bars_fit_one_screen():
     assert '.leaders-side .leader-list, #volumeRatioView .leader-list, #changeView .leader-list' in CSS
     assert 'touch-action: pan-y' in CSS
-    assert 'grid-template-columns: repeat(14, minmax(0, 1fr)) !important' in CSS
+    assert 'grid-template-columns: repeat(var(--th-sector-count, 15), minmax(0, 1fr)) !important' in CSS
     assert '#sectorFlow .flow-list' in CSS
     assert 'overflow-x: hidden !important; overflow-y: hidden !important;' in CSS
 

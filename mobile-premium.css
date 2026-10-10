@@ -172,8 +172,8 @@
   #sectorFlow .flow-caption, #sectorFlow .flow-scroll-hint { display: none !important; }
   #sectorFlow .flow-sort { padding: 3px !important; gap: 2px !important; }
   #sectorFlow .flow-sort button { padding: 6px 9px !important; font-size: 10px !important; }
-  #sectorFlow .flow-list { display: flex !important; flex: 1 1 0 !important; min-height: 0 !important; height: 100% !important; gap: 5px !important; padding: 12px 10px 16px !important; overflow-x: auto !important; overflow-y: hidden !important; overscroll-behavior-x: contain; touch-action: pan-x; -webkit-overflow-scrolling: touch; scrollbar-width: thin !important; }
-  #sectorFlow .flow-row { flex: 0 0 clamp(54px, 12vw, 75px) !important; width: clamp(54px, 12vw, 75px) !important; min-width: clamp(54px, 12vw, 75px) !important; height: 100% !important; min-height: 0 !important; }
+  #sectorFlow .flow-list { display: grid !important; grid-template-columns: repeat(var(--th-sector-count, 15), minmax(0, 1fr)) !important; grid-template-rows: minmax(0, 1fr) !important; grid-auto-flow: column !important; flex: 1 1 0 !important; min-height: 0 !important; height: 100% !important; gap: 2px !important; padding: 12px 6px 12px !important; overflow-x: hidden !important; overflow-y: hidden !important; overscroll-behavior: none; touch-action: none; scrollbar-width: none !important; }
+  #sectorFlow .flow-row { flex: initial !important; width: auto !important; min-width: 0 !important; height: 100% !important; min-height: 0 !important; }
   #sectorFlow .flow-bar-zone { flex: 1 1 0 !important; min-height: 0 !important; width: 100% !important; }
   #sectorFlow .flow-fill { width: min(26px, 58%) !important; min-width: 6px !important; }
   #sectorFlow .flow-name { width: 100% !important; margin-top: 10px !important; color: #d6e4f9 !important; font-size: 9px !important; letter-spacing: .025em !important; }

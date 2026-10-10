@@ -1593,7 +1593,7 @@ body.theme-dark .rail {
   #sectorFlow .flow-caption, #sectorFlow .flow-scroll-hint { display: none !important; }
   #sectorFlow .flow-sort { padding: 3px !important; gap: 2px !important; }
   #sectorFlow .flow-sort button { padding: 6px 9px !important; font-size: 10px !important; }
-  #sectorFlow .flow-list { display: grid !important; grid-template-columns: repeat(14, minmax(0, 1fr)) !important; flex: 1 1 0 !important; min-height: 0 !important; height: 100% !important; gap: 2px !important; padding: 12px 6px 12px !important; overflow-x: hidden !important; overflow-y: hidden !important; overscroll-behavior: none; touch-action: none; -webkit-overflow-scrolling: auto; scrollbar-width: none !important; }
+  #sectorFlow .flow-list { display: grid !important; grid-template-columns: repeat(var(--th-sector-count, 15), minmax(0, 1fr)) !important; grid-template-rows: minmax(0, 1fr) !important; grid-auto-flow: column !important; flex: 1 1 0 !important; min-height: 0 !important; height: 100% !important; gap: 2px !important; padding: 12px 6px 12px !important; overflow-x: hidden !important; overflow-y: hidden !important; overscroll-behavior: none; touch-action: none; -webkit-overflow-scrolling: auto; scrollbar-width: none !important; }
   #sectorFlow .flow-row { flex: initial !important; width: auto !important; min-width: 0 !important; height: 100% !important; min-height: 0 !important; }
   #sectorFlow .flow-bar-zone { flex: 1 1 0 !important; min-height: 0 !important; width: 100% !important; }
   #sectorFlow .flow-fill { width: min(16px, 72%) !important; min-width: 4px !important; }
@@ -1615,7 +1615,7 @@ body.theme-dark .rail {
 }
 
 @media (max-width: 390px) {
-  #sectorFlow .flow-list { grid-template-columns: repeat(14, minmax(0, 1fr)) !important; gap: 1px !important; padding: 10px 4px 10px !important; }
+  #sectorFlow .flow-list { grid-template-columns: repeat(var(--th-sector-count, 15), minmax(0, 1fr)) !important; gap: 1px !important; padding: 10px 4px 10px !important; }
   #sectorFlow .flow-fill { width: min(12px, 76%) !important; }
   #sectorFlow .flow-name { font-size: 6px !important; }
   #sectorFlow .flow-name-metric, #sectorFlow .flow-value { font-size: 6px !important; }

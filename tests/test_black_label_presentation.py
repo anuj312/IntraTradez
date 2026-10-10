@@ -24,7 +24,7 @@ def test_title_and_market_status_hooks_stay_intact():
 
 
 def test_mobile_no_sector_horizontal_scroll_and_stock_tables_still_scroll():
-    assert 'grid-template-columns: repeat(14, minmax(0, 1fr)) !important' in CSS
+    assert 'grid-template-columns: repeat(var(--th-sector-count, 15), minmax(0, 1fr)) !important' in CSS
     assert 'overflow-x: hidden !important; overflow-y: hidden !important;' in CSS
     assert '#sectorFlow .flow-list' in CSS
     assert 'overflow-y: auto !important' in CSS

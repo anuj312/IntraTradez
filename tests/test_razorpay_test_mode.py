@@ -129,4 +129,4 @@ def test_ui_explicitly_labels_test_checkout_and_keeps_live_member_separate():
     assert 'TEST MEMBER · DEMO ONLY' in html
     assert "String(order.key || '').startsWith('rzp_test_')" in html
     assert 'Try ₹4,999 Test Checkout' in html
-    assert 'SUPABASE_RAZORPAY_TEST_SETUP.sql' in (ROOT/'RAZORPAY_TEST_MODE_SETUP.md').read_text()
+    assert 'SUPABASE_RAZORPAY_TEST_SETUP.sql' in (ROOT/'MDS/RAZORPAY_TEST_MODE_SETUP.md').read_text()

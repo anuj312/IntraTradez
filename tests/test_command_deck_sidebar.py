@@ -30,4 +30,4 @@ def test_sidebar_style_is_desktop_only_and_mobile_uses_compact_bar():
     assert '@media (min-width:901px)' in CSS
     assert '@media (max-width:900px)' in CSS
     assert 'rail-ambient,.rail-section-count,.brand-kicker' in CSS
-    assert 'grid-template-columns: repeat(14, minmax(0, 1fr)) !important' in CSS
+    assert 'grid-template-columns: repeat(var(--th-sector-count, 15), minmax(0, 1fr)) !important' in CSS
