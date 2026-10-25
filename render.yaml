@@ -3,7 +3,6 @@ services:
     name: intraday-momentum-scanner
     env: python
     plan: starter
-    rootDir: outputs
     buildCommand: python3 -m pip install -r requirements.txt
     startCommand: python3 -m uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1
     healthCheckPath: /api/health

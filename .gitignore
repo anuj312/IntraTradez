@@ -1,7 +1,6 @@
 .env
-__pycache__/
-.pytest_cache/
+.venv/
 .runtime/
+__pycache__/
 *.pyc
 .DS_Store
-numbers.txt

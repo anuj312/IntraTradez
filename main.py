@@ -1,6 +1,6 @@
 """ASGI entrypoint matching Render's `uvicorn main:app` start command.
 
-The scanner's original login, HTML and Flask endpoints are preserved. Uvicorn
+The live scanner serves its dashboard and APIs without user authentication. Uvicorn
 serves Flask using the supported WSGI-to-ASGI adapter. Initialization begins
 on worker boot, rather than waiting for the first visitor after 09:15.
 """
