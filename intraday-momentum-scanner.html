@@ -5736,6 +5736,64 @@ body.theme-dark .leaders-side .leader-table tbody tr:not(.leader-placeholder-row
   #volumeRatioView .leader-chip,
   #changeView .leader-chip { flex-basis: 25px !important; width: 25px !important; height: 25px !important; }
 }
+
+/* ADDITIVE CONTINUATION RADAR -- all original view selectors remain intact. */
+#continuationView { color: var(--ink); }
+.cont-panel { border-radius: 16px; overflow: hidden; }
+.cont-head-text { max-width: 730px; }
+.cont-kicker { font-size: 10px; font-weight: 900; letter-spacing: .16em; color: var(--green); text-transform: uppercase; margin-bottom: 6px; }
+.cont-help { margin: 5px 0 0; font-size: 11px; line-height: 1.55; color: var(--muted); }
+.cont-tag { display: inline-flex; gap: 6px; align-items: center; border: 1px solid #cce8de; border-radius: 999px; background: #f0faf6; color: #0c8765; padding: 7px 11px; font-size: 10px; font-weight: 800; white-space: nowrap; }
+.cont-status { margin: 17px 20px 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; color: var(--muted); background: var(--paper); font-size: 11px; line-height: 1.6; }
+.cont-status strong { color: var(--ink); }
+.cont-grid { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 16px; padding: 18px 20px 21px; }
+.cont-list { min-width: 0; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--card); }
+.cont-list-header { display:flex; gap: 9px; align-items:center; padding: 13px 13px 11px; border-bottom: 1px solid var(--line); background: var(--paper); }
+.cont-list-header h3 { margin:0; flex:1; font-size:11px; font-weight:900; text-transform:uppercase; letter-spacing:.04em; }
+.cont-list-header .count { color:var(--muted); font-size:10px; font-weight:800; }
+.cont-bull .cont-list-header { border-top:3px solid var(--green); }
+.cont-bear .cont-list-header { border-top:3px solid var(--red); }
+.cont-bull h3 { color:var(--green); }
+.cont-bear h3 { color:var(--red); }
+.cont-list-scroll { overflow-x:auto; max-width:100%; }
+.cont-table { border-collapse:collapse; width:100%; min-width:438px; table-layout:fixed; font-variant-numeric:tabular-nums; }
+.cont-table th { text-align:right; padding:9px 8px; font-size:9px; background:var(--paper); color:var(--muted); font-weight:800; border-bottom:1px solid var(--line); }
+.cont-table td { text-align:right; padding:12px 8px; font-size:11px; font-weight:800; border-bottom:1px solid var(--line); }
+.cont-table tbody tr:last-child td { border-bottom:0; }
+.cont-table th:first-child,.cont-table td:first-child { text-align:left; width:29%; padding-left:12px; }
+.cont-table th:nth-child(2),.cont-table td:nth-child(2) { width:13%; }
+.cont-table th:nth-child(3),.cont-table td:nth-child(3) { width:15%; }
+.cont-table th:nth-child(4),.cont-table td:nth-child(4) { width:14%; }
+.cont-table th:nth-child(5),.cont-table td:nth-child(5) { width:14%; }
+.cont-table th:nth-child(6),.cont-table td:nth-child(6) { width:15%; }
+.cont-table a { color:inherit; text-decoration:none; border-bottom:1px dotted currentColor; cursor:pointer; }
+.cont-table a:hover { color:var(--blue); }
+.cont-symbol { display:block; font-size:11px; letter-spacing:-.01em; }
+.cont-sector { display:block; color:var(--muted); font-size:9px; font-weight:500; margin-top:3px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.cont-score { display:inline-flex; min-width:38px; justify-content:center; padding:5px; border-radius:7px; background:var(--green-soft); color:var(--green); font-weight:900; }
+.cont-bear .cont-score { background:var(--red-soft); color:var(--red); }
+.cont-empty { padding:26px 16px; font-size:11px; color:var(--muted); text-align:center; line-height:1.7; }
+.cont-note { padding: 0 20px 20px; font-size: 10px; line-height: 1.7; color:var(--muted); }
+.cont-mobile-switch { display:none; }
+body.theme-dark .cont-tag { background:#173d36; color:#a3e5cb; border-color:#31554e; }
+body.theme-dark .cont-list-header { background:#18283c; }
+@media(max-width:1100px) { .cont-grid { grid-template-columns:1fr; } .cont-table { min-width:540px; } }
+@media(max-width:760px) {
+  .cont-grid { padding:11px 10px; gap:10px; }
+  .cont-panel .panel-head { padding:14px 13px; align-items:flex-start; }
+  .cont-status { margin:10px; }
+  .cont-note { padding:5px 12px 15px; }
+  .cont-table { min-width:438px; }
+}
+@media(max-width:480px) {
+  /* Fit a fifth tab without altering the legacy four views' markup. */
+  .rail .nav { overflow-x:auto !important; overflow-y:hidden; justify-content:flex-start !important; scrollbar-width:none; }
+  .rail .nav::-webkit-scrollbar { display:none; }
+  .rail .nav button { flex:0 0 auto !important; min-width:74px !important; }
+  .rail .nav button:nth-child(5) .nav-title::after { content:'Continue'; }
+  #continuationView .cont-tag { display:none; }
+}
+
 </style>
 
 </head>
@@ -5750,12 +5808,13 @@ body.theme-dark .leaders-side .leader-table tbody tr:not(.leader-placeholder-row
   <div class="brand-mark" aria-hidden="true"><svg viewBox="0 0 40 40" fill="none"><path d="M7 27.5L16 18.5L22 23L33 11" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M26 11H33V18" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="8" cy="9" r="2" fill="currentColor" opacity=".48"/></svg></div>
   <div class="brand-copy"><span class="brand-kicker">INTELLIGENCE DESK <span class="brand-kicker-dot">/</span> 01</span><div class="brand-name">Trend Hunter</div><div class="brand-subtitle">SPECTRA // SIGNAL ENGINE</div></div>
 </div>
-<div class="rail-section-heading"><span class="rail-label">WORKSPACE</span><span class="rail-section-count">04 MODULES</span></div>
+<div class="rail-section-heading"><span class="rail-label">WORKSPACE</span><span class="rail-section-count">05 MODULES</span></div>
 <nav class="nav" aria-label="Primary navigation">
   <button class="active" type="button" aria-label="Momentum Radar"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round" stroke-linecap="round"><path d="M3 18l6-7 4 4 8-10"/><path d="M15 5h6v6"/><path d="M3 6v12h18" opacity=".4"/></svg></span><span class="nav-copy"><span class="nav-overline">01 <span>·</span> SIGNALS</span><span class="nav-title">Momentum Radar</span><span class="nav-subtitle">Price action &amp; strength</span></span><span class="nav-arrow" aria-hidden="true">↗</span></button>
   <button type="button" data-scroll="sectorFlow" aria-label="Sector Flow"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round" stroke-linecap="round"><rect x="3" y="12" width="4" height="8" rx="1"/><rect x="10" y="7" width="4" height="13" rx="1"/><rect x="17" y="3" width="4" height="17" rx="1"/></svg></span><span class="nav-copy"><span class="nav-overline">02 <span>·</span> ROTATION</span><span class="nav-title">Sector Flow</span><span class="nav-subtitle">Capital across sectors</span></span><span class="nav-arrow" aria-hidden="true">↗</span></button>
   <button type="button" data-view="volumeRatio" aria-label="Volume Radar"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round" stroke-linecap="round"><path d="M3 12v0M7 8v8M11 4v16M15 7v10M19 10v4" stroke-width="2.5"/><path d="M2 21h20" opacity=".5"/></svg></span><span class="nav-copy"><span class="nav-overline">03 <span>·</span> PARTICIPATION</span><span class="nav-title">Volume Radar</span><span class="nav-subtitle">Trading activity &amp; pressure</span></span><span class="nav-arrow" aria-hidden="true">↗</span></button>
   <button type="button" data-view="change" aria-label="%Change Radar"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round" stroke-linecap="round"><path d="M4 17L9 12l4 3 7-9"/><path d="M15 6h5v5"/><circle cx="6" cy="6" r="2" opacity=".6"/><circle cx="18" cy="18" r="2" opacity=".6"/></svg></span><span class="nav-copy"><span class="nav-overline">04 <span>·</span> MOVEMENT</span><span class="nav-title">%Change Radar</span><span class="nav-subtitle">Relative price performance</span></span><span class="nav-arrow" aria-hidden="true">↗</span></button>
+  <button type="button" data-view="continuation" aria-label="Continuation Radar"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M3 19L9 13l4 3 8-10"/><path d="M15 6h6v6"/><path d="M3 8l4 4" opacity=".5"/></svg></span><span class="nav-copy"><span class="nav-overline">05 <span>·</span> CONTINUATION</span><span class="nav-title">Continuation Radar</span><span class="nav-subtitle">Developing from 9:20 AM</span></span><span class="nav-arrow" aria-hidden="true">↗</span></button>
 </nav>
 <div class="rail-spacer"></div>
 <div class="rail-note"><div class="rail-note-top"><span class="rail-note-icon" aria-hidden="true">✦</span><span class="rail-note-tag">DESK INSIGHT</span></div><strong>Research mode</strong><p>Momentum is a way to frame attention, not a recommendation to buy or sell.</p><span class="rail-note-foot">ANALYSIS, NOT ADVICE <span aria-hidden="true">↗</span></span></div>
@@ -6030,6 +6089,32 @@ body.theme-dark .leaders-side .leader-table tbody tr:not(.leader-placeholder-row
 </div>
 
 
+
+<!-- NEW MODULE: standalone continuation radar; existing four modules unchanged -->
+<div id="continuationView" class="view-hidden">
+  <section class="panel cont-panel" aria-label="Intraday continuation radar">
+    <div class="panel-head">
+      <div class="cont-head-text">
+        <div class="cont-kicker">Developing 09:20–09:55 · full screen 10:00+</div>
+        <h2 class="panel-title">Continuation Radar</h2>
+        <p class="cont-help">Strong one-way intraday candidates ranked by Trend Efficiency, candle persistence, VWAP/EMA alignment, time-matched volume and relative strength. Only completed 5-minute candles count.</p>
+      </div>
+      <span class="cont-tag">5M CANDLES · IST</span>
+    </div>
+    <div class="cont-status" id="contStatus" role="status" aria-live="polite"><strong>Collecting from 9:15.</strong> Developing rankings start after the first completed candle at 9:20 IST.</div>
+    <div class="cont-grid">
+      <section class="cont-list cont-bull" aria-label="Bullish continuation candidates">
+        <div class="cont-list-header"><h3>↗ Top Bullish Continuation</h3><span id="contBullCount" class="count">0 / 5</span></div>
+        <div class="cont-list-scroll" id="contBullList"></div>
+      </section>
+      <section class="cont-list cont-bear" aria-label="Bearish continuation candidates">
+        <div class="cont-list-header"><h3>↘ Top Bearish Continuation</h3><span id="contBearCount" class="count">0 / 5</span></div>
+        <div class="cont-list-scroll" id="contBearList"></div>
+      </section>
+    </div>
+    <div class="cont-note">From 09:20 to 09:55, results are <strong>Developing only</strong> and may change substantially. At 10:00 onward, full screening thresholds (initial, not backtested): RVOL ≥ 1.5×, efficiency ≥ 60%, directional volume persistence ≥ 60%, opening-range breakout, aligned VWAP/EMA, relative strength and minimum turnover. Scores weight efficiency 25%, structure/persistence 25%, VWAP/EMA 20%, volume 15%, relative strength 15%. Before 10:00 missing RVOL is displayed as unavailable; from 10:00 missing baselines or conflicting signals mean <strong>No Trade</strong>. An equal-weight proxy of available NIFTY 50 constituents is used for relative strength, not the official index price. No stock is guaranteed to keep moving in one direction.</div>
+  </section>
+</div>
 
 <section class="panel flow-panel view-hidden" id="sectorFlow" aria-label="Sector flow">
 
@@ -7352,8 +7437,12 @@ const flow = view === "flow";
 const volume = view === "volumeRatio";
 
 const percentChange = view === "change";
+const continuation = view === "continuation";
+window.continuationSelected = continuation;
+document.getElementById("continuationView").classList.toggle("view-hidden", !continuation);
+if (continuation) loadContinuationRadar();
 
-document.getElementById("momentumView").classList.toggle("view-hidden", flow || volume || percentChange);
+document.getElementById("momentumView").classList.toggle("view-hidden", flow || volume || percentChange || continuation);
 
 document.getElementById("sectorFlow").classList.toggle("view-hidden", !flow);
 
@@ -7361,9 +7450,11 @@ document.getElementById("volumeRatioView").classList.toggle("view-hidden", !volu
 
 document.getElementById("changeView").classList.toggle("view-hidden", !percentChange);
 
-document.getElementById("pageTitle").textContent = flow ? "Sector flow" : volume ? "Volm Ratio" : percentChange ? "% Change" : "Trend Hunter";
+document.getElementById("pageTitle").textContent = continuation ? "Continuation Radar" : flow ? "Sector flow" : volume ? "Volm Ratio" : percentChange ? "% Change" : "Trend Hunter";
 
-document.getElementById("pageSubhead").textContent = flow
+document.getElementById("pageSubhead").textContent = continuation
+? "Developing 5-minute candle signals from 9:20 AM; full continuation screening after 10:00 AM."
+: flow
 
 ? "Compare average percentage change across sectors. Green leads; red lags."
 
@@ -7378,7 +7469,7 @@ document.getElementById("pageSubhead").textContent = flow
 : "Review the strongest movers now by composite Score, participation, trend strength, and momentum.";
 
 document.querySelectorAll(".nav button").forEach(item => {
-  const isActive = flow ? item.dataset.scroll === "sectorFlow" : volume ? item.dataset.view === "volumeRatio" : percentChange ? item.dataset.view === "change" : item.textContent.toLowerCase().includes("momentum");
+  const isActive = continuation ? item.dataset.view === "continuation" : flow ? item.dataset.scroll === "sectorFlow" : volume ? item.dataset.view === "volumeRatio" : percentChange ? item.dataset.view === "change" : item.textContent.toLowerCase().includes("momentum");
   item.classList.toggle("active", isActive);
   if (isActive && window.matchMedia("(max-width: 760px)").matches) {
     // A horizontally scrollable navigation bar must keep its selected tab visible.
@@ -7743,6 +7834,12 @@ setView("change");
 
 showToast("% Change selected");
 
+} else if (button.dataset.view === "continuation") {
+
+setView("continuation");
+
+showToast("Continuation Radar selected");
+
 } else {
 
 showToast(`${button.textContent.trim()} is not configured for live data`);
@@ -7771,6 +7868,65 @@ mobileFilterToggle.addEventListener('click', () => {
   mobileFilterToggle.setAttribute('aria-expanded', String(expanded));
   mobileFilterToggle.textContent = expanded ? '✕ Close' : '☷ Filters';
 });
+
+// Continuation module is fetched only when selected, independent of legacy /api/scan.
+window.continuationSelected = false;
+let continuationLastFetch = 0;
+let continuationLoading = false;
+function continuationTable(rows) {
+  if (!rows || !rows.length) return '<div class="cont-empty">No directional candidates with sufficient completed-candle data yet.</div>';
+  const columns = '<thead><tr><th>Stock</th><th>Quality</th><th>Efficiency</th><th>RVOL</th><th>Change</th><th>Persistence</th></tr></thead>';
+  const values = rows.map(row => {
+    const symbol = String(row.symbol || '').toUpperCase();
+    const href = 'https://www.tradingview.com/chart/?symbol=' + encodeURIComponent('NSE:' + symbol) + '&interval=5';
+    return `<tr title="VWAP ${row.vwap} · EMA9 ${row.ema9} · EMA21 ${row.ema21} · Max reversal ${row.maxReversalPct}%">
+      <td><a class="cont-symbol" href="${href}" target="_blank" rel="noopener noreferrer">${escapeHtml(symbol)} ↗</a><span class="cont-sector">${escapeHtml(String(row.sector || ''))} · ${row.signalStage === 'developing' ? 'Developing' : 'Full screen'}</span></td>
+      <td><span class="cont-score">${Number(row.score).toFixed(0)}</span></td>
+      <td>${Number(row.efficiency).toFixed(0)}%</td><td>${row.rvol === null || row.rvol === undefined ? '—' : Number(row.rvol).toFixed(2) + '×'}</td>
+      <td class="${Number(row.changePct) >= 0 ? 'positive':'negative'}">${Number(row.changePct)>0 ? '+' : ''}${Number(row.changePct).toFixed(2)}%</td>
+      <td>${Number(row.persistence).toFixed(0)}%</td></tr>`;
+  }).join('');
+  return `<table class="cont-table">${columns}<tbody>${values}</tbody></table>`;
+}
+async function loadContinuationRadar(force = false) {
+  if (!window.continuationSelected || continuationLoading) return;
+  const now = Date.now();
+  if (!force && now-continuationLastFetch < 12000) return;
+  continuationLoading = true;
+  continuationLastFetch = now;
+  const status = document.getElementById('contStatus');
+  try {
+    const response = await fetch('/api/continuation' + (force ? '?refresh=1' : ''), {cache:'no-store'});
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    const data = await response.json();
+    if (data.status === 'collecting_first_candle') {
+      status.innerHTML = '<strong>Collecting first candle (09:15–09:20).</strong> Developing rankings start at 09:20 IST after it closes.';
+    } else if (data.status === 'pre_market') {
+      status.innerHTML = '<strong>Market not open yet.</strong> Collection starts at 09:15 IST, with the first results from 09:20.';
+    } else if (data.status === 'market_closed') {
+      status.innerHTML = '<strong>Market closed today.</strong> Continuation Radar operates on the current NSE session during market hours.';
+    } else if (data.status === 'waiting_for_benchmark') {
+      status.innerHTML = '<strong>Waiting for NIFTY constituent history.</strong> At least ten complete NIFTY 50 constituent series are required to calculate relative strength.';
+    } else if (data.status === 'waiting_for_candles') {
+      status.innerHTML = '<strong>Awaiting completed candles / history seed.</strong> The live Kite 5-minute data must be ready before directional rankings can be produced.';
+    } else {
+      const developing = data.phase === 'developing';
+      status.innerHTML = `<strong>${developing ? 'DEVELOPING · provisional' : 'FULL SCREEN · strict filters'} · ${escapeHtml(data.asOf || '')}</strong> · ${Number(data.completedCandles || 0)} completed 5m candle(s) · ${Number(data.eligibleCount || 0)} ${developing ? 'early candidates' : 'qualifying stocks'} · ${Number(data.noTradeCount || 0)} excluded / No Trade · ${data.benchmarkReady ? Number(data.benchmarkCoverage || 0) + ' NIFTY constituents' : 'Benchmark pending'} · ${data.openingRangeReady ? 'Opening range established' : 'Opening range building'} · No partial candles.`;
+    }
+    const bullish = Array.isArray(data.bullish) ? data.bullish : [];
+    const bearish = Array.isArray(data.bearish) ? data.bearish : [];
+    document.getElementById('contBullCount').textContent = bullish.length + ' / 5';
+    document.getElementById('contBearCount').textContent = bearish.length + ' / 5';
+    document.getElementById('contBullList').innerHTML = continuationTable(bullish);
+    document.getElementById('contBearList').innerHTML = continuationTable(bearish);
+  } catch (error) {
+    status.textContent = 'Continuation data temporarily unavailable. Existing scanner views are unaffected.';
+  } finally {
+    continuationLoading = false;
+  }
+}
+// Continuation-specific polling, separate from the established /api/scan timer.
+setInterval(() => { if (window.continuationSelected) loadContinuationRadar(); }, 15000);
 
 // Start the scanner immediately.
 initializeTheme();

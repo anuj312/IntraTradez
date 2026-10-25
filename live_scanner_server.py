@@ -34,6 +34,7 @@ from kiteconnect.exceptions import TokenException
 from sector_definitions import ALL_SYMBOLS, SECTOR_DEFINITIONS
 
 from scanner_features import FiveMinuteBuilder, market_bucket, merge_finished, cumulative_slot_ratio, one_way_metrics, breakout_signals, replay_session
+from continuation_radar import scan_continuation, cutoff_for
 
 
 # ----------------------------
@@ -2041,6 +2042,52 @@ def scan():
     resp.headers["ETag"] = etag
     resp.headers["Cache-Control"] = "no-store" if market_is_open() else "private, max-age=0, must-revalidate"
     return resp
+
+
+# Dedicated optional continuation radar. The established /api/scan and scanner
+# calculation paths are deliberately unchanged.
+CONTINUATION_CACHE_LOCK = threading.Lock()
+CONTINUATION_CACHE: dict = {"key": None, "expires": 0.0, "value": None}
+
+
+@app.get("/api/continuation")
+def continuation():
+    ensure_live_started()
+    now = datetime.now(IST)
+    key = cutoff_for(now).isoformat()
+    # Until the first 5m bar is complete, there is no candle-based signal.
+    if now.weekday() >= 5 or now.time() < dtime(9, 20) or now.time() > dtime(15, 30):
+        resp = jsonify(scan_continuation({}, SECTOR_DEFINITIONS, now))
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
+    with CONTINUATION_CACHE_LOCK:
+        cached = CONTINUATION_CACHE["value"]
+        if cached is not None and CONTINUATION_CACHE["key"] == key and time.monotonic() < CONTINUATION_CACHE["expires"] and request.args.get("refresh") != "1":
+            resp = jsonify(cached)
+            resp.headers["Cache-Control"] = "no-store"
+            return resp
+
+        # Only the selected continuation tab requests this endpoint. Do not
+        # trigger a second expensive scan on each 3-second /api/scan request.
+        with DATA_LOCK:
+            frames = {symbol: HISTORY.get(token, {}).get("intraday")
+                      for symbol, token in SYMBOL_TO_TOKEN.items()}
+        histories = {}
+        for symbol, frame in frames.items():
+            if frame is None or frame.empty:
+                continue
+            # Retain last 35 trading dates, covering up to 30 previous baseline
+            # sessions, while reducing transfer and per-request object creation.
+            available = frame["date"].dt.date.unique()
+            if len(available) > 35:
+                frame = frame[frame["date"].dt.date >= available[-35]]
+            histories[symbol] = frame[["date", "open", "high", "low", "close", "volume"]].to_dict("records")
+        result = scan_continuation(histories, SECTOR_DEFINITIONS, now)
+        result["feedLive"] = bool(_feed_status()[1])
+        CONTINUATION_CACHE.update(key=key, expires=time.monotonic() + (10.0 if result.get("status") != "ok" else 55.0), value=result)
+        resp = jsonify(result)
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
 
 
 @app.get("/api/stock/<symbol>/candles")
