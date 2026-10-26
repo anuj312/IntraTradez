@@ -65,3 +65,23 @@ python3 -m py_compile live_scanner_server.py continuation_radar.py
 ```
 
 See the test command above for the current unit and regression check results. Existing Kite live-feed runtime and full served-browser workflow could not be end-to-end tested without a valid Kite environment.
+
+## Live-data stability patch (2026-10-26)
+
+The scanner's existing polling previously set `state.liveRows = null` when a market-open `/api/scan` response temporarily contained zero rows or an API request failed after the feed had disconnected. This made all the stock rankings and sector lists disappear and then reappear, even without a browser reload or a Render process restart.
+
+The updated frontend now:
+
+- Keeps the **last valid same-session/same-universe live snapshot** during an interruption of up to **120 seconds**.
+- Displays a prominent **DELAYED MARKET DATA — DO NOT TRADE** notice, showing the last tick time; retained data are never labeled live.
+- Clears the retained snapshot if the interruption lasts beyond two minutes, or the trading day/universe changes. This prevents indefinite or cross-session stale market signals.
+- Prevents overlapping `/api/scan` polls; aborts an unresponsive request after 12 seconds.
+- Resumes the normal LIVE indicator automatically once new live data arrive.
+
+This patch is strictly a **data display resilience** fix, not a cure for underlying Kite disconnects, Render process restarts, or API errors. During a disconnected feed, values can be stale and **must not be used to make trade entries**. The Python backend and scoring formulas are unchanged.
+
+Extra frontend resilience test (requires Node.js):
+
+```bash
+node tests/test_stable_polling.mjs
+```

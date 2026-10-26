@@ -2021,6 +2021,16 @@ padding: 3px;
   
 .sector-stock-name { cursor:pointer; }
 .stock-chip { font-size:10px; margin-left:5px; opacity:.8; }
+
+/* Data resilience: never silently present retained quotes as live ticks. */
+.feed-chip.delayed { color: #87500e; background: #fff3d9; border-color: #f1c77a; }
+.feed-chip.delayed .feed-chip-dot { animation: none; }
+.stale-data-banner { margin: 0 0 15px; padding: 12px 16px; border: 1px solid #edb85b;
+  border-radius: 12px; background: #fff5dd; color: #7b420a; font-size: 12px;
+  line-height: 1.45; font-weight: 750; box-shadow: 0 3px 12px rgba(145, 84, 11, .06); }
+.stale-data-banner[hidden] { display: none !important; }
+body.theme-dark .stale-data-banner { background: #362a17; border-color: #8b611f; color: #ffd48b; }
+body.theme-dark .feed-chip.delayed { color: #ffd48b; background: #362a17; border-color: #8b611f; }
 </style>
 
   <style id="ktm-obsidian-ivory">
@@ -5923,7 +5933,9 @@ body.theme-dark .cont-list-header { background:#18283c; }
 
 </section>
 
-
+<div id="staleDataBanner" class="stale-data-banner" role="alert" hidden>
+  ⚠ DELAYED DATA — Showing the last known quotes, not live prices. Do not enter trades using stale data.
+</div>
 
 <div id="momentumView">
 <section class="summary-grid" aria-label="Scan summary">
@@ -6296,7 +6308,11 @@ universeSize: 0,
 
 detailSymbols: 0,
 
-lastTick: null
+lastTick: null,
+
+lastValidUpdateAt: 0,
+lastValidDay: null,
+lastValidUniverse: null
 
 };
 
@@ -7519,7 +7535,7 @@ document.getElementById("peakFoot").textContent = "vs. 20-session average";
 
 
 
-const feedLabels = { live: "Live", snapshot: "Previous session", offline: "Offline", seeding: "Seeding", delayed: "Delayed", invalid_token: "Kite token expired" };
+const feedLabels = { live: "Live", snapshot: "Previous session", offline: "Offline", seeding: "Seeding", delayed: "Delayed · not live", invalid_token: "Kite token expired" };
 const seedLabel = `Seeding (${Number(state.seedProgress.done || 0)}/${Number(state.seedProgress.total || 0)})`;
 
 const feedLabel = state.feedStatus === "seeding" ? seedLabel : (feedLabels[state.feedStatus] || "Offline");
@@ -7533,6 +7549,14 @@ feedChip.className = `feed-chip ${state.feedStatus}`;
 document.getElementById("feedChipText").textContent = feedLabel;
 
 document.getElementById("ticksChip").textContent = state.ticks === null ? "Ticks --" : `Ticks ${Number(state.ticks).toLocaleString()}`;
+const staleBanner = document.getElementById("staleDataBanner");
+const displayingDelayedRows = state.feedStatus === "delayed" && Array.isArray(state.liveRows) && state.liveRows.length > 0;
+staleBanner.hidden = !displayingDelayedRows;
+if (displayingDelayedRows) {
+  const tickLabel = state.lastTick ? new Date(state.lastTick).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", second: "2-digit" }) + " IST" : "unknown";
+  staleBanner.textContent = `⚠ DELAYED MARKET DATA — Last received tick: ${tickLabel}. These prices and rankings are NOT LIVE. Do not enter trades until Live status returns.`;
+}
+
 
 
 
@@ -7554,6 +7578,8 @@ state.feedStatus === "live"
 
 ? "Kite token expired / refresh the Render access token"
 
+: state.feedStatus === "delayed"
+? "Market feed delayed / last known data / DO NOT TRADE"
 : "Trend Hunter / NSE universe · offline";
 
 
@@ -7603,99 +7629,96 @@ toast.style.transform = "translate(-50%, 16px)";
 
 
 // Read live scan data directly from this server.
+// Never start overlapping scan requests: on slow Render responses, older fetches
+// must not arrive after newer ones and overwrite the market display.
+let scanRequestInFlight = false;
+const MAX_RETAINED_SCAN_AGE_MS = 120000; // two minutes; never retain indefinitely
+function currentIstDay() {
+  return new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+}
+function canRetainRecentScan() {
+  return Array.isArray(state.liveRows) && state.liveRows.length > 0 &&
+    state.lastValidUniverse === state.universe &&
+    state.lastValidDay === currentIstDay() &&
+    state.lastValidUpdateAt > 0 &&
+    Date.now() - state.lastValidUpdateAt < MAX_RETAINED_SCAN_AGE_MS;
+}
+function showFeedInterruption(manual, reason = "Live feed temporarily unavailable") {
+  state.live = false;
+  if (canRetainRecentScan()) {
+    // Retain ONLY the last same-session, same-universe live quote snapshot.
+    // Mark it clearly delayed; never pass it off as a current trading signal.
+    state.feedStatus = "delayed";
+  } else {
+    state.liveRows = null;
+    state.sectorFlow = null;
+    state.niftyIndex = null;
+    state.feedStatus = "offline";
+  }
+  render();
+  if (manual) showToast(`${reason}. ${state.feedStatus === "delayed" ? "Last quotes retained as delayed" : "Waiting for new quotes"}`);
+}
 async function loadLiveData(manual = false) {
+  if (scanRequestInFlight) return;
+  scanRequestInFlight = true;
+  const requestUniverse = state.universe;
+  const params = new URLSearchParams({ universe: requestUniverse, sector: "ALL", limit: "2000" });
+  // Ensure the polling loop can recover if an upstream request gets stuck.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+  try {
+    const response = await fetch(`/api/scan?${params.toString()}`, { cache: "no-store", signal: controller.signal });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const payload = await response.json();
+    if (!Array.isArray(payload.rows)) throw new Error("Invalid scan payload");
+    // Universe can change while a request is in flight. Don't apply old data.
+    if (requestUniverse !== state.universe) return;
 
-const params = new URLSearchParams({
+    if (payload.seed) state.seedProgress = payload.seed;
+    if (typeof payload.fast_mode === "boolean") state.fastMode = payload.fast_mode;
+    if (Number.isFinite(Number(payload.universe_size))) state.universeSize = Number(payload.universe_size);
+    if (Number.isFinite(Number(payload.detail_symbols))) state.detailSymbols = Number(payload.detail_symbols);
+    if (Number.isFinite(Number(payload.ticks))) state.ticks = Number(payload.ticks);
 
-  universe: state.universe,
+    if (!payload.rows.length && payload.market_open === true) {
+      // API may briefly return zero rows when Kite disconnects, a seed runs,
+      // or a process restarts. Do not blank an otherwise recent live scanner.
+      showFeedInterruption(manual, "Waiting for live stock quotes");
+      return;
+    }
 
-sector: "ALL",
+    // In previous-session/offline mode there is no reason to display stale
+    // current-session rows; only use data supplied explicitly by the backend.
+    if (Array.isArray(payload.sector_flow)) state.sectorFlow = payload.sector_flow;
+    state.niftyIndex = payload.nifty_index && Number.isFinite(Number(payload.nifty_index.change)) ? payload.nifty_index : null;
+    state.lastTick = payload.last_tick || null;
+    state.liveRows = payload.rows.length ? payload.rows : null;
+    state.live = payload.live === true && payload.rows.length > 0;
+    if (state.live) {
+      state.lastValidUpdateAt = Date.now();
+      state.lastValidDay = typeof payload.last_tick === "string" && /^\d{4}-\d{2}-\d{2}/.test(payload.last_tick)
+        ? payload.last_tick.slice(0, 10) : currentIstDay();
+      state.lastValidUniverse = requestUniverse;
+    }
 
- // Request the full configured universe so averages cannot be truncated before rendering.
- limit: "2000"
+    const previousSession = payload.status === "previous_session" || payload.status === "market_closed";
+    // A connected API is not proof that the Kite ticks are current.
+    state.feedStatus = state.live ? "live"
+      : payload.status === "invalid_token" ? "invalid_token"
+      : previousSession ? "snapshot"
+      : payload.status === "seeding" && !state.liveRows ? "seeding"
+      : state.liveRows ? "delayed" : "offline";
 
-});
-
-
-
-try {
-  const response = await fetch(`/api/scan?${params.toString()}`, { cache: "no-cache" });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const payload = await response.json();
-
-if (!Array.isArray(payload.rows)) throw new Error("Invalid scan payload");
-
-
-
-if (payload.seed) state.seedProgress = payload.seed;
-
-if (Array.isArray(payload.sector_flow)) state.sectorFlow = payload.sector_flow;
-state.lastTick = payload.last_tick || null;
-
-if (typeof payload.fast_mode === "boolean") state.fastMode = payload.fast_mode;
-
-if (Number.isFinite(Number(payload.universe_size))) state.universeSize = Number(payload.universe_size);
-
-if (Number.isFinite(Number(payload.detail_symbols))) state.detailSymbols = Number(payload.detail_symbols);
-
-state.niftyIndex = payload.nifty_index && Number.isFinite(Number(payload.nifty_index.change)) ? payload.nifty_index : null;
-
-
-
-if (!payload.rows.length && payload.live !== true) {
-
-state.liveRows = null;
-
-state.live = false;
-
-const previousSession = payload.status === "previous_session" || payload.status === "market_closed";
-
-state.feedStatus = payload.status === "invalid_token" ? "invalid_token" : payload.status === "seeding" ? "seeding" : previousSession ? "snapshot" : "offline";
-
-render();
-
-if (manual) showToast(payload.status === "seeding" ? "Waiting for first live quotes; baseline loading" : previousSession ? "Showing previous session data" : "Live feed unavailable; no simulated data shown");
-
-return;
-
-}
-
-
-
-state.liveRows = payload.rows;
-
-state.live = payload.live === true;
-
-state.ticks = Number.isFinite(Number(payload.ticks)) ? Number(payload.ticks) : state.ticks;
-
-
-
-const previousSession = payload.status === "previous_session" || payload.status === "market_closed";
-
-state.feedStatus = state.live ? "live" : payload.status === "invalid_token" ? "invalid_token" : payload.status === "seeding" ? "seeding" : previousSession ? "snapshot" : "offline";
-
-
-
-render();
-
-if (manual) showToast(state.live ? "Live scan refreshed" : "Feed reachable; waiting for ticks");
-
-} catch (error) {
-
-state.feedStatus = "offline";
-
-if (!state.live) {
-
-state.liveRows = null;
-
-render();
-
-}
-
-if (manual) showToast("Live feed unavailable; no simulated data shown");
-
-}
-
+    render();
+    if (manual) showToast(state.live ? "Live scan refreshed" : "Feed reachable; waiting for current quotes");
+  } catch (error) {
+    if (requestUniverse === state.universe) {
+      showFeedInterruption(manual, "Scanner refresh failed");
+    }
+  } finally {
+    clearTimeout(timeout);
+    scanRequestInFlight = false;
+  }
 }
 
 
