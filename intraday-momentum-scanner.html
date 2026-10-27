@@ -6420,10 +6420,13 @@ function initializeTheme() {
 
 
 let scanTimer = null;
+const SCAN_POLL_INTERVAL_MS = 5000;
 function startScanPolling() {
   if (scanTimer) return;
   loadLiveData(true);
-  scanTimer = setInterval(() => { if (!document.hidden) loadLiveData(false); }, 3000);
+  // Match the reference project's timer: do not pause /api/scan when hidden.
+  // Browser power-saving may throttle or suspend the timer; no keep-awake guarantee.
+  scanTimer = setInterval(() => loadLiveData(false), SCAN_POLL_INTERVAL_MS);
 }
 function stopScanPolling() {
   if (scanTimer) clearInterval(scanTimer);
@@ -7949,7 +7952,26 @@ async function loadContinuationRadar(force = false) {
   }
 }
 // Continuation-specific polling, separate from the established /api/scan timer.
-setInterval(() => { if (window.continuationSelected) loadContinuationRadar(); }, 15000);
+// Hidden tabs use a lightweight health request, not expensive scanner calculations.
+setInterval(() => { if (!document.hidden && window.continuationSelected) loadContinuationRadar(); }, 15000);
+
+// Scan polling above continues in background tabs, subject to browser throttling.
+// A visible-tab event still refreshes immediately rather than waiting for the timer.
+function refreshAfterTabReturn() {
+  if (document.hidden) return;
+  // Never label a long-paused quote snapshot as live while fetching new data.
+  if (state.feedStatus === "live" && Date.now() - state.lastValidUpdateAt > 15000) {
+    showFeedInterruption(false, "Refreshing after tab switch");
+  }
+  loadLiveData(true);
+  if (window.continuationSelected) loadContinuationRadar(true);
+}
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) refreshAfterTabReturn();
+});
+window.addEventListener("pageshow", event => {
+  if (event.persisted) refreshAfterTabReturn();
+});
 
 // Start the scanner immediately.
 initializeTheme();

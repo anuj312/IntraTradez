@@ -21,7 +21,14 @@ Open **http://127.0.0.1:8050**. No login required. The scanner works only with a
 
 ## Deployment
 
-The existing `render.yaml`, `app.py` (Gunicorn) and `main.py` (Uvicorn) entrypoints remain. Set the two Kite environment variables in your host. Render does not automatically persist runtime files unless a disk is attached.
+`render.yaml` has been **removed** from this package as requested. Configure the Render web service manually in its dashboard:
+
+- **Build command:** `pip install -r requirements.txt`
+- **Start command:** `gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --worker-class gthread --threads 8 --timeout 120`
+- **Environment:** Set `KITE_API_KEY`, `KITE_ACCESS_TOKEN` (and any scanner options you need) in Render's environment settings; never commit `.env` or market-data credentials.
+- **Plan:** Select your intended Render plan in Render's dashboard; deleting the local YAML **does not change an already running service's plan or settings**.
+
+`app.py` (Gunicorn) and `main.py` (Uvicorn) are still available. Render does not automatically persist runtime candle-cache files unless a disk is attached.
 
 **Security:** Anyone who can access the server can view market data and invoke the read-only scanner APIs. Do not put it on a public domain unless this is intentional. Kite credentials remain server-side; never put them into the frontend.
 
@@ -83,5 +90,23 @@ This patch is strictly a **data display resilience** fix, not a cure for underly
 Extra frontend resilience test (requires Node.js):
 
 ```bash
+node tests/test_stable_polling.mjs
+```
+
+## Browser tab switching / 5-second polling (2026-10-27)
+
+This version adopts the auto-refresh mechanism observed in the provided reference `outputs (3)(1).zip`:
+
+- The browser fetches `/api/scan` immediately and attempts a new request **every five seconds** whether the Trend Hunter tab is **visible or hidden**; `document.hidden` does not suppress the scanner poll.
+- The previous separate `GET /api/health` timer (every 60 seconds when hidden) has been removed. Only the existing main scan polling is used.
+- The existing in-flight request guard and 12-second timeout still prevent overlapping or stuck scanner requests. Transient failures retain a recent snapshot clearly marked **DELAYED — DO NOT TRADE**, subject to the original two-minute freshness limit.
+- Returning to the Trend Hunter tab triggers an immediate full scan and, when selected, Continuation Radar refresh. Continuation Radar's separate 15-second **visible-tab-only** polling is unchanged to avoid unnecessary heavy calculations in a hidden tab.
+- **Important:** Background browser timers are best-effort. Chrome/other browsers can throttle or suspend timers, especially on mobile, battery saver, or sleeping devices. Any incoming requests that actually arrive may reset Render Free's idle countdown, but this **does not guarantee** the service stays awake, nor prevent restarts for other reasons. For continuous unattended market scanning, use an always-on host.
+- Removing `render.yaml` only removes the bundled Blueprint configuration. Any existing Render deployment settings must be changed manually in Render's dashboard.
+
+Run the related checks with:
+
+```bash
+node tests/test_background_refresh.mjs
 node tests/test_stable_polling.mjs
 ```
